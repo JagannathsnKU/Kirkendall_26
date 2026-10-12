@@ -4,6 +4,7 @@ import { universityById } from '../src/data.ts'
 import {
   SUSPICIOUS_EVENTS,
   type ActivityEvent,
+  type AiResponse,
   type AdminActivity,
   type AdminOverview,
   type AdminPost,
@@ -50,7 +51,17 @@ const userCols = (sql: Sql) => sql`
   u.id, u.name, u.email, u.university_id, u.points, u.co2, u.kwh, u.water, u.plastic, u.banned,
   exists (select 1 from flags f where f.user_id = u.id and f.kind = 'user' and f.status = 'open') as flagged`
 
-const toEvent = (e: { id: string; user_id: string; name: string; kind: string; detail: string; by: string | null; ts: string }): ActivityEvent => ({
+const parseAi = (raw: string | null) => {
+  try {
+    return raw ? (JSON.parse(raw) as AiResponse) : null
+  } catch {
+    return null
+  }
+}
+
+type EventCols = { id: string; user_id: string; name: string; kind: string; detail: string; by: string | null; ai: string | null; ts: string }
+
+const toEvent = (e: EventCols): ActivityEvent => ({
   id: String(e.id),
   userId: e.user_id,
   name: e.name,
@@ -58,6 +69,7 @@ const toEvent = (e: { id: string; user_id: string; name: string; kind: string; d
   detail: e.detail,
   by: e.by,
   ts: Number(e.ts),
+  ai: parseAi(e.ai),
 })
 
 const query = (req: IncomingMessage) => new URL(req.url ?? '/', 'http://localhost').searchParams
@@ -121,7 +133,7 @@ export async function queue(req: IncomingMessage): Promise<FlagItem[]> {
   const sql = await db()
   await requireAdmin(sql, req)
   const rows = await sql`
-    select f.id as flag_id, f.kind as flag_kind, f.reason, f.note, f.ai_verdict, f.ai_reason, f.ts as flag_ts, ${userCols(sql)},
+    select f.id as flag_id, f.kind as flag_kind, f.reason, f.note, f.ai_verdict, f.ai_reason, f.ai_explanation, f.ts as flag_ts, ${userCols(sql)},
       p.id as post_id, p.kind as post_kind, p.url, p.poster, p.label, p.emoji, p.score, p.hidden, p.bonus, s.points as snap_points
     from flags f
     join users u on u.id = f.user_id
@@ -143,7 +155,7 @@ export async function queue(req: IncomingMessage): Promise<FlagItem[]> {
     reason: r.reason,
     note: r.note,
     reports: reports.filter((x) => x.post_id === r.post_id).map((x) => ({ reason: x.reason, count: x.n })),
-    ai: r.ai_verdict ? { verdict: r.ai_verdict, reason: r.ai_reason ?? '' } : null,
+    ai: r.ai_verdict ? { verdict: r.ai_verdict, reason: r.ai_reason ?? '', explanation: r.ai_explanation ?? '' } : null,
     ts: Number(r.flag_ts),
     user: toRow(r as unknown as UserCols),
     post: r.post_id
@@ -162,13 +174,15 @@ export async function queue(req: IncomingMessage): Promise<FlagItem[]> {
   }))
 }
 
+/** `?show=rejected` lists photos the AI turned down instead of suspicious activity. */
 export async function activity(req: IncomingMessage): Promise<AdminActivity> {
   const sql = await db()
   await requireAdmin(sql, req)
-  const events = await sql`
-    select e.id, e.user_id, u.name, e.kind, e.detail, a.name as by, e.ts
+  const kinds = query(req).get('show') === 'rejected' ? ['rejected'] : [...SUSPICIOUS_EVENTS]
+  const events = await sql<EventCols[]>`
+    select e.id, e.user_id, u.name, e.kind, e.detail, a.name as by, e.ai, e.ts
     from events e join users u on u.id = e.user_id left join users a on a.id = e.actor_id
-    where e.kind in ${sql(SUSPICIOUS_EVENTS)}
+    where e.kind in ${sql(kinds)}
     order by e.ts desc limit 100`
   const top = await sql<{ user_id: string; name: string; n: number }[]>`
     select e.user_id, u.name, count(*)::int as n
@@ -177,7 +191,7 @@ export async function activity(req: IncomingMessage): Promise<AdminActivity> {
     group by e.user_id, u.name order by n desc limit 5`
   return {
     top: top.map((t) => ({ userId: t.user_id, name: t.name, count: t.n })),
-    events: events.map((e) => toEvent(e as never)),
+    events: events.map(toEvent),
   }
 }
 
@@ -199,11 +213,11 @@ export async function user(req: IncomingMessage): Promise<AdminUserDetail> {
   const [u] = await sql<UserCols[]>`select ${userCols(sql)} from users u where u.id = ${id}`
   if (!u) throw new HttpError(404, 'User not found.')
   const snaps = await sql`
-    select s.id, s.action_id, s.label, s.emoji, s.kind, s.ts, s.points, s.thumb,
+    select s.id, s.action_id, s.label, s.emoji, s.kind, s.ts, s.points, s.thumb, s.ai,
       exists (select 1 from posts p where p.snap_id = s.id) as posted
     from snaps s where s.user_id = ${id} order by s.ts desc limit 30`
-  const events = await sql`
-    select e.id, e.user_id, u.name, e.kind, e.detail, a.name as by, e.ts
+  const events = await sql<EventCols[]>`
+    select e.id, e.user_id, u.name, e.kind, e.detail, a.name as by, e.ai, e.ts
     from events e join users u on u.id = e.user_id left join users a on a.id = e.actor_id
     where e.user_id = ${id} order by e.ts desc limit 60`
   return {
@@ -218,8 +232,9 @@ export async function user(req: IncomingMessage): Promise<AdminUserDetail> {
       points: s.points,
       thumb: s.thumb,
       posted: s.posted,
+      ai: parseAi(s.ai),
     })),
-    events: events.map((e) => toEvent(e as never)),
+    events: events.map(toEvent),
   }
 }
 

@@ -147,6 +147,10 @@ const SCHEMA = [
     ts bigint not null
   )`,
   `create index if not exists password_resets_user on password_resets (user_id, ts)`,
+  // The AI's full JSON answer, so admins can read exactly what it said.
+  `alter table events add column if not exists ai text`,
+  `alter table snaps add column if not exists ai text`,
+  `alter table flags add column if not exists ai_explanation text not null default ''`,
 ]
 
 let ready: Promise<Sql> | null = null

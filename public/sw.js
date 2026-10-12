@@ -1,4 +1,4 @@
-const CACHE = 'ecou-v8'
+const CACHE = 'ecou-v9'
 const SHELL = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon.svg']
 
 self.addEventListener('install', (e) => {

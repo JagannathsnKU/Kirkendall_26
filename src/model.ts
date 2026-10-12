@@ -128,7 +128,12 @@ export interface ActivityEvent {
   detail: string
   by: string | null
   ts: number
+  /** The AI's full answer behind this event, if an AI made the call. */
+  ai: AiResponse | null
 }
+
+/** Raw JSON an AI answered with, e.g. { match, confidence, reason, explanation }. */
+export type AiResponse = Record<string, unknown>
 
 export interface AdminActivity {
   top: { userId: string; name: string; count: number }[]
@@ -136,13 +141,15 @@ export interface AdminActivity {
 }
 
 export interface AdminUserDetail extends AdminUserRow {
-  snaps: (Snap & { posted: boolean })[]
+  snaps: (Snap & { posted: boolean; ai: AiResponse | null })[]
   events: ActivityEvent[]
 }
 
 export interface AiReview {
   verdict: 'ok' | 'remove' | 'error'
   reason: string
+  /** Longer note for the moderator: what the AI saw and why it decided. */
+  explanation?: string
 }
 
 /** A Spotlight post as admins see it: any school, including hidden ones. */

@@ -172,8 +172,24 @@ export const redeemReward = (rewardId: string) => call<Redemption>('redeem', 'PO
 
 const VIDEO_EXT: Record<string, string> = { 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm' }
 
-/** Uploads the media straight to storage, then posts it to the user's school Spotlight. */
+/**
+ * Uploads the media straight to storage, then posts it to the user's school Spotlight.
+ * Without media storage (or if the upload fails), it posts the photo the server already kept for the snap.
+ */
 export async function sharePost(userId: string, snapId: string, photo: Photo, onProgress?: (pct: number) => void) {
+  const { sharing } = await call<{ sharing?: boolean }>('health').catch(() => ({ sharing: false }))
+  if (sharing) {
+    try {
+      return await uploadPost(userId, snapId, photo, onProgress)
+    } catch (e) {
+      console.error('Upload failed, sharing the stored photo instead', e)
+    }
+  }
+  onProgress?.(100)
+  await call('posts', 'POST', { snapId, inline: true })
+}
+
+async function uploadPost(userId: string, snapId: string, photo: Photo, onProgress?: (pct: number) => void) {
   const { upload } = await import('@vercel/blob/client')
   const put = async (name: string, body: Blob, contentType: string, progress?: (pct: number) => void) => {
     const blob = await upload(`spotlight/${userId}/${name}`, body, {
@@ -223,7 +239,7 @@ export const getAdminPosts = () => call<AdminPost[]>('admin/posts')
 
 export const getAdminQueue = () => call<FlagItem[]>('admin/queue')
 
-export const getAdminActivity = () => call<AdminActivity>('admin/activity')
+export const getAdminActivity = (rejected = false) => call<AdminActivity>(`admin/activity${rejected ? '?show=rejected' : ''}`)
 
 export const getAdminUsers = (q: string) => call<AdminUserRow[]>(`admin/users?q=${encodeURIComponent(q)}`)
 

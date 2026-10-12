@@ -14,6 +14,8 @@ export interface Verdict {
   /** The AI thought it was the same scene as one of the student's earlier photos. */
   duplicate?: boolean
   custom?: CustomAction
+  /** The AI's full JSON answer, stored for admins. */
+  ai: Record<string, unknown>
 }
 
 export const OTHER_ID = 'other'
@@ -23,6 +25,10 @@ const MIN_CONFIDENCE = 0.6
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite'
 
 const BASE_PROPS = {
+  explanation: {
+    type: 'string',
+    description: 'For the moderator, not the student: what the photo shows and why you decided as you did. 1 to 3 sentences.',
+  },
   match: { type: 'boolean', description: 'The photo shows the required evidence.' },
   confidence: { type: 'number', minimum: 0, maximum: 1 },
   suspicious: { type: 'boolean', description: 'Photo of a screen, printout, or another photo, or looks like a stock/downloaded image.' },
@@ -83,7 +89,9 @@ const num = (v: unknown, cap: number) => Math.max(0, Math.min(cap, Number(v) || 
 const text = (v: unknown, max: number, fallback: string) => String(v || '').trim().slice(0, max) || fallback
 
 function mockVerdict(actionId: string, description?: string): Verdict {
-  const verdict: Verdict = { verified: true, confidence: 1, reason: 'Dev mode: AI check skipped.' }
+  const reason = 'Dev mode: AI check skipped.'
+  const ai = { match: true, confidence: 1, reason, explanation: 'VERIFY_MOCK is on, so no AI was asked.' }
+  const verdict: Verdict = { verified: true, confidence: 1, reason, ai }
   if (actionId !== OTHER_ID) return verdict
   return {
     ...verdict,
@@ -174,7 +182,7 @@ export async function verifyPhoto(actionId: string, images: string[], descriptio
   const duplicate = compare && out.duplicate === true
   const verified =
     out.match === true && !suspicious && !duplicate && confidence >= MIN_CONFIDENCE && (!isOther || out.sustainable === true)
-  const verdict: Verdict = { verified, confidence, reason: text(out.reason, 140, ''), suspicious, duplicate }
+  const verdict: Verdict = { verified, confidence, reason: text(out.reason, 140, ''), suspicious, duplicate, ai: out }
   if (!isOther || !verified) return verdict
 
   const impact: Impact = {

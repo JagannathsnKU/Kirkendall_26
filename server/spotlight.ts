@@ -5,7 +5,7 @@
  * the upload and records the resulting URL.
  */
 import { randomUUID } from 'node:crypto'
-import type { IncomingMessage } from 'node:http'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { handleUpload, type HandleUploadBody } from '@vercel/blob/client'
 import { REPORT_REASONS, avatarUrl, spotlightBonus, type Post } from '../src/model.ts'
 import { requireUser } from './auth.ts'
@@ -53,25 +53,42 @@ export async function mediaToken(req: IncomingMessage) {
   })
 }
 
+/**
+ * With `inline`, the post shows the photo the snap already stored (a still, for videos)
+ * instead of media uploaded to Blob, so sharing works without Blob storage.
+ */
 export async function createPost(req: IncomingMessage) {
   const sql = await db()
   const userId = await requireUser(sql, req)
   const body = await readJson(req)
-  const url = ownMediaUrl(body.url, userId)
-  const poster = body.poster ? ownMediaUrl(body.poster, userId) : null
-  if (!url) throw new HttpError(400, 'Invalid media.')
+  const inline = body.inline === true
+  const url = inline ? null : ownMediaUrl(body.url, userId)
+  const poster = !inline && body.poster ? ownMediaUrl(body.poster, userId) : null
+  if (!inline && !url) throw new HttpError(400, 'Invalid media.')
 
-  const [snap] = await sql<{ id: string; kind: string; label: string; emoji: string; ts: string }[]>`
-    select id, kind, label, emoji, ts from snaps where id = ${str(body.snapId, 64)} and user_id = ${userId}`
+  const [snap] = await sql<{ id: string; kind: string; label: string; emoji: string; ts: string; has_photo: boolean }[]>`
+    select id, kind, label, emoji, ts, photo <> '' as has_photo from snaps where id = ${str(body.snapId, 64)} and user_id = ${userId}`
   if (!snap) throw new HttpError(404, 'That snap wasn’t found.')
   if (Date.now() - Number(snap.ts) > SHARE_WINDOW_MS) throw new HttpError(400, 'Share snaps right after you take them.')
+  if (inline && !snap.has_photo) throw new HttpError(400, 'This snap has no photo to share.')
 
+  const id = randomUUID()
   const [user] = await sql<{ university_id: string }[]>`select university_id from users where id = ${userId}`
   await sql`
     insert into posts (id, snap_id, user_id, university_id, kind, url, poster, label, emoji, ts)
-    values (${randomUUID()}, ${snap.id}, ${userId}, ${user.university_id}, ${snap.kind}, ${url}, ${poster}, ${snap.label}, ${snap.emoji}, ${Date.now()})
+    values (${id}, ${snap.id}, ${userId}, ${user.university_id}, ${inline ? 'photo' : snap.kind}, ${url ?? `/api/post-photo?id=${id}`},
+      ${poster}, ${snap.label}, ${snap.emoji}, ${Date.now()})
     on conflict (snap_id) do nothing`
   return { ok: true }
+}
+
+/** The stored snap photo behind an inline post. Served as an image so <img> tags can load it. */
+export async function servePostPhoto(req: IncomingMessage, res: ServerResponse) {
+  const id = str(new URL(req.url ?? '/', 'http://localhost').searchParams.get('id'), 64)
+  const [row] = id ? await (await db())<{ photo: string }[]>`select s.photo from posts p join snaps s on s.id = p.snap_id where p.id = ${id}` : []
+  if (!row?.photo) return res.writeHead(404, { 'Cache-Control': 'no-store' }).end()
+  res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400', 'X-Content-Type-Options': 'nosniff' })
+  res.end(Buffer.from(row.photo.slice(row.photo.indexOf(',') + 1), 'base64'))
 }
 
 export async function listPosts(req: IncomingMessage): Promise<Post[]> {

@@ -25,7 +25,7 @@ import { db, dbConfigured, type Query, type Sql } from './db.ts'
 import { HttpError, readJson, send, str } from './http.ts'
 import { appUrl, requireMail, sendMail } from './mail.ts'
 import { logEvent, logSuspicious, removeMedia } from './moderation.ts'
-import { createPost, deletePost, listPosts, mediaToken, report, vote } from './spotlight.ts'
+import { createPost, deletePost, listPosts, mediaToken, report, servePostPhoto, vote } from './spotlight.ts'
 import { ANTI_CHEAT, OTHER_ID, verifyPhoto } from './verify.ts'
 
 const RATE_LIMIT = 20
@@ -387,13 +387,13 @@ async function snap(req: IncomingMessage): Promise<SubmitOutcome> {
   const outcome = verdict.verified ? 'ok' : verdict.duplicate ? 'duplicate' : 'rejected'
   console.log(`[verify] ${what} (${kind}, ${source}) → ${outcome} (${verdict.confidence.toFixed(2)})`)
   if (verdict.duplicate) {
-    await logSuspicious(sql, userId, 'duplicate', `${preset?.label ?? description ?? actionId}: same scene as a recent snap`)
+    await logSuspicious(sql, userId, 'duplicate', `${preset?.label ?? description ?? actionId}: same scene as a recent snap`, verdict.ai)
     return { ok: false, kind: 'duplicate', message: 'This looks like the same scene as a recent snap. Snap a new action!' }
   }
   if (!verdict.verified) {
     const claim = preset?.label ?? description ?? actionId
-    if (verdict.suspicious) await logSuspicious(sql, userId, 'screen', `${claim}: ${verdict.reason}`)
-    else await logEvent(sql, userId, 'rejected', `${claim}: ${verdict.reason}`)
+    if (verdict.suspicious) await logSuspicious(sql, userId, 'screen', `${claim}: ${verdict.reason}`, verdict.ai)
+    else await logEvent(sql, userId, 'rejected', `${claim}: ${verdict.reason}`, null, verdict.ai)
     return { ok: false, kind: 'rejected', message: verdict.reason || 'We couldn’t see that action in this photo.' }
   }
 
@@ -429,10 +429,11 @@ async function snap(req: IncomingMessage): Promise<SubmitOutcome> {
     const now = Date.now()
     await tx`
       insert into snaps (id, user_id, action_id, label, emoji, kind, points, day, ts, thumb, hash, photo, impact, headline, analogy, analogy_emoji,
-        trip_start, trip_end, trip)
+        trip_start, trip_end, trip, ai)
       values (${snapId}, ${userId}, ${action.id}, ${action.label}, ${action.emoji}, ${kind}, ${action.points}, ${day}, ${now}, ${thumb}, ${hash},
         ${photo}, ${JSON.stringify(action.impact)}, ${action.headline}, ${fact.text}, ${fact.emoji},
-        ${trip?.summary.start ?? null}, ${trip?.summary.end ?? null}, ${tripCard ? JSON.stringify(tripCard) : null})`
+        ${trip?.summary.start ?? null}, ${trip?.summary.end ?? null}, ${tripCard ? JSON.stringify(tripCard) : null},
+        ${JSON.stringify(verdict.ai).slice(0, 8000)})`
     if (hash) {
       await tx`
         insert into photo_hashes (user_id, hash, ts) values (${userId}, ${hash}, ${now})
@@ -576,6 +577,12 @@ const ROUTES: Record<string, (req: IncomingMessage) => Promise<unknown>> = {
   'POST /api/admin/ban': admin.ban,
 }
 
+/** GET routes that answer with an image instead of JSON. */
+const IMAGES: Record<string, (req: IncomingMessage, res: ServerResponse) => Promise<unknown>> = {
+  '/api/avatar': serveAvatar,
+  '/api/post-photo': servePostPhoto,
+}
+
 export async function handle(req: IncomingMessage, res: ServerResponse) {
   const origin = process.env.ALLOWED_ORIGIN
   if (origin) {
@@ -586,8 +593,9 @@ export async function handle(req: IncomingMessage, res: ServerResponse) {
   }
 
   const path = new URL(req.url ?? '/', 'http://localhost').pathname.replace(/\/+$/, '')
-  if (req.method === 'GET' && path === '/api/avatar') {
-    return serveAvatar(req, res).catch((e) => {
+  const image = req.method === 'GET' && IMAGES[path]
+  if (image) {
+    return image(req, res).catch((e) => {
       console.error(e)
       if (!res.headersSent) res.writeHead(500).end()
     })

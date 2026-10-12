@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Bell, Bot, ChevronRight, Flag, LogOut, Search, ShieldCheck } from 'lucide-react'
+import { Bell, Bot, Camera, ChevronRight, Flag, Inbox, LogOut, Search, ShieldCheck, Users as UsersIcon } from 'lucide-react'
 import { alertsOn, alertsSupported, enableAlerts } from '../alerts'
 import {
   decideFlag,
@@ -22,12 +22,14 @@ import { fmt } from '../data'
 import {
   EVENT_LABELS,
   REPORT_REASONS,
+  SUSPICIOUS_EVENTS,
   type ActivityEvent,
   type AdminActivity,
   type AdminOverview,
   type AdminPost,
   type AdminUserDetail,
   type AdminUserRow,
+  type AiResponse,
   type AiReview,
   type FlagItem,
 } from '../model'
@@ -63,7 +65,7 @@ export default function Admin() {
   }
 
   return (
-    <div className="page">
+    <div className="page admin">
       <header className="top">
         <Logo />
         <button className="icon-btn" onClick={leave} aria-label="Sign out">
@@ -76,7 +78,7 @@ export default function Admin() {
         <p className="sub">Reports, flags, and suspicious activity at every school.</p>
       </div>
 
-      <Overview />
+      <Overview open={alerts?.open ?? 0} onQueue={() => setTab('queue')} />
 
       {alertsSupported && !notify && (
         <div className="install">
@@ -115,7 +117,7 @@ function Loading() {
   )
 }
 
-function Overview() {
+function Overview({ open, onQueue }: { open: number; onQueue: () => void }) {
   const [data, setData] = useState<AdminOverview | null>(null)
 
   useEffect(() => {
@@ -124,13 +126,105 @@ function Overview() {
 
   if (!data) return null
   return (
-    <section className="card">
-      <p className="label">
-        {fmt(data.students)} students · {fmt(data.snapsThisWeek)} snaps this week
-      </p>
-      <ImpactStats impact={data.impact} />
-      <ImpactFact impact={data.impact} />
-    </section>
+    <>
+      <div className="admin-stats">
+        <div className="admin-stat">
+          <span className="admin-stat-icon">
+            <UsersIcon size={16} />
+          </span>
+          <strong className="num">{fmt(data.students)}</strong>
+          <span>Students</span>
+        </div>
+        <div className="admin-stat">
+          <span className="admin-stat-icon">
+            <Camera size={16} />
+          </span>
+          <strong className="num">{fmt(data.snapsThisWeek)}</strong>
+          <span>Weekly snaps</span>
+        </div>
+        <button className={`admin-stat${open ? ' is-alert' : ''}`} onClick={onQueue}>
+          <span className="admin-stat-icon">
+            <Inbox size={16} />
+          </span>
+          <strong className="num">{fmt(open)}</strong>
+          <span>To review</span>
+        </button>
+      </div>
+      <section className="card">
+        <p className="label">Impact so far</p>
+        <ImpactStats impact={data.impact} compact />
+        <ImpactFact impact={data.impact} />
+      </section>
+    </>
+  )
+}
+
+/* ───────── AI answers ───────── */
+
+const pct = (v: unknown) => `${Math.round(Number(v) * 100)}%`
+const yes = (v: unknown) => v === true
+
+const SHOWN = new Set(['verdict', 'match', 'confidence', 'suspicious', 'duplicate', 'sustainable', 'reason', 'explanation'])
+
+const FIELD_NAMES: Record<string, string> = {
+  label: 'Title',
+  emoji: 'Emoji',
+  headline: 'Headline',
+  co2: 'CO₂ (kg)',
+  kwh: 'Electricity (kWh)',
+  water: 'Water (L)',
+  plastic: 'Plastic items',
+}
+
+/** Everything an AI answered, laid out so an admin can read it all. */
+function AiAnswer({ ai }: { ai: AiResponse }) {
+  const chips: { text: string; tone: 'good' | 'bad' | 'warn' | '' }[] = []
+  if (ai.verdict !== undefined) chips.push(ai.verdict === 'remove' ? { text: 'Take it down', tone: 'bad' } : { text: 'Looks fine', tone: 'good' })
+  if (ai.match !== undefined) chips.push(yes(ai.match) ? { text: 'Shows the action', tone: 'good' } : { text: 'Doesn’t show the action', tone: 'bad' })
+  if (ai.confidence !== undefined) chips.push({ text: `${pct(ai.confidence)} sure`, tone: '' })
+  if (yes(ai.suspicious)) chips.push({ text: 'Screen or stock photo', tone: 'warn' })
+  if (yes(ai.duplicate)) chips.push({ text: 'Same scene as before', tone: 'warn' })
+  if (ai.sustainable !== undefined && !yes(ai.sustainable)) chips.push({ text: 'Not sustainable', tone: 'bad' })
+  const extra = Object.entries(ai).filter(([k, v]) => !SHOWN.has(k) && v !== '' && v !== null && v !== undefined)
+
+  return (
+    <div className="ai-answer">
+      {chips.length > 0 && (
+        <div className="ai-chips">
+          {chips.map((c) => (
+            <span key={c.text} className={`ai-chip${c.tone ? ` is-${c.tone}` : ''}`}>
+              {c.text}
+            </span>
+          ))}
+        </div>
+      )}
+      {!!ai.explanation && (
+        <div className="ai-field">
+          <p className="label">Why</p>
+          <p>{String(ai.explanation)}</p>
+        </div>
+      )}
+      {!!ai.reason && (
+        <div className="ai-field">
+          <p className="label">{ai.verdict !== undefined ? 'Summary' : 'Told the student'}</p>
+          <p>“{String(ai.reason)}”</p>
+        </div>
+      )}
+      {extra.length > 0 && (
+        <dl className="ai-extra">
+          {extra.map(([k, v]) => (
+            <div key={k}>
+              <dt>{FIELD_NAMES[k] ?? k}</dt>
+              <dd>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      <details className="ai-raw">
+        <summary>Raw response</summary>
+        <pre>{JSON.stringify(ai, null, 2)}</pre>
+      </details>
+    </div>
   )
 }
 
@@ -339,77 +433,113 @@ function AiBox({ ai, busy, onRetry }: { ai: AiReview | null; busy: boolean; onRe
   const title = !ai ? 'AI review pending' : ai.verdict === 'ok' ? 'AI: looks fine' : ai.verdict === 'remove' ? 'AI: take it down' : 'AI review failed'
   return (
     <div className={`mod-ai is-${ai?.verdict ?? 'pending'}`}>
-      <Bot size={18} />
-      <div>
+      <div className="mod-ai-head">
+        <Bot size={18} />
         <strong>{title}</strong>
-        {ai?.reason && <span>{ai.reason}</span>}
+        {(!ai || ai.verdict === 'error') && (
+          <button className="btn btn-soft btn-sm" disabled={busy} onClick={onRetry}>
+            Ask AI
+          </button>
+        )}
       </div>
-      {(!ai || ai.verdict === 'error') && (
-        <button className="btn btn-soft btn-sm" disabled={busy} onClick={onRetry}>
-          Ask AI
-        </button>
-      )}
+      {ai?.reason && <p>{ai.reason}</p>}
+      {ai?.explanation && <p className="mod-ai-why">{ai.explanation}</p>}
     </div>
   )
 }
 
 /* ───────── Activity ───────── */
 
+type Show = 'warnings' | 'rejected'
+
 function Activity({ onUser }: { onUser: (id: string) => void }) {
+  const [show, setShow] = useState<Show>('warnings')
   const [data, setData] = useState<AdminActivity | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    getAdminActivity().then(setData, (e: Error) => setError(e.message))
-  }, [])
+    setData(null)
+    getAdminActivity(show === 'rejected').then(setData, (e: Error) => setError(e.message))
+  }, [show])
 
-  if (error) return <p className="empty">{error}</p>
-  if (!data) return <Loading />
   return (
     <>
-      {data.top.length > 0 && (
-        <section>
-          <p className="label pad">Most warnings this week</p>
-          <ul className="board">
-            {data.top.map((t) => (
-              <li key={t.userId}>
-                <button className="mod-row" onClick={() => onUser(t.userId)}>
-                  <Avatar name={t.name} size={32} />
-                  <span className="board-name">{t.name}</span>
-                  <span className="board-pts num">{t.count}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
+      <div className="mod-filter">
+        <button className={show === 'warnings' ? 'is-on' : ''} onClick={() => setShow('warnings')}>
+          Warnings
+        </button>
+        <button className={show === 'rejected' ? 'is-on' : ''} onClick={() => setShow('rejected')}>
+          AI rejections
+        </button>
+      </div>
+      {error ? (
+        <p className="empty">{error}</p>
+      ) : !data ? (
+        <Loading />
+      ) : (
+        <>
+          {show === 'warnings' && data.top.length > 0 && (
+            <section>
+              <p className="label pad">Most warnings this week</p>
+              <ul className="mod-list">
+                {data.top.map((t) => (
+                  <li key={t.userId}>
+                    <button className="mod-row" onClick={() => onUser(t.userId)}>
+                      <Avatar name={t.name} size={32} />
+                      <strong className="mod-row-name">{t.name}</strong>
+                      <span className="mod-count num">{t.count}</span>
+                      <ChevronRight size={18} className="chev" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          <section>
+            <p className="label pad">Recent</p>
+            {data.events.length ? (
+              <Events events={data.events} onUser={onUser} />
+            ) : (
+              <p className="empty">{show === 'rejected' ? 'The AI hasn’t rejected any snaps yet.' : 'No suspicious activity yet.'}</p>
+            )}
+          </section>
+        </>
       )}
-      <section>
-        <p className="label pad">Recent</p>
-        {data.events.length ? <Events events={data.events} onUser={onUser} /> : <p className="empty">No suspicious activity yet.</p>}
-      </section>
     </>
   )
 }
 
+const WARNINGS = new Set<string>(SUSPICIOUS_EVENTS)
+const tone = (kind: string) => (kind === 'rejected' ? 'is-rejected' : WARNINGS.has(kind) ? 'is-activity' : '')
+
 /** With `onUser`, rows name the student and open their profile; without, they're one user's history. */
 function Events({ events, onUser }: { events: ActivityEvent[]; onUser?: (id: string) => void }) {
   return (
-    <ul className="board">
-      {events.map((e) => {
-        const label = EVENT_LABELS[e.kind] ?? e.kind
-        const details = [onUser && label, e.detail, e.by && `by ${e.by}`].filter(Boolean).join(' · ')
-        return (
-          <li key={e.id}>
-            <button className="mod-row" onClick={onUser && (() => onUser(e.userId))} disabled={!onUser}>
-              <div className="mod-event">
-                <strong>{onUser ? e.name : label}</strong>
-                {details && <span>{details}</span>}
-              </div>
-              <span className="mod-time">{timeAgo(e.ts)}</span>
-            </button>
-          </li>
-        )
-      })}
+    <ul className="mod-list">
+      {events.map((e) => (
+        <li key={e.id} className="mod-event">
+          <div className="mod-event-head">
+            {onUser && (
+              <button className="mod-event-who" onClick={() => onUser(e.userId)}>
+                <Avatar name={e.name} size={26} />
+                <strong>{e.name}</strong>
+              </button>
+            )}
+            <span className={`mod-tag ${tone(e.kind)}`}>{EVENT_LABELS[e.kind] ?? e.kind}</span>
+            <span className="mod-time">{timeAgo(e.ts)}</span>
+          </div>
+          {e.detail && <p className="mod-event-detail">{e.detail}</p>}
+          {e.by && <p className="mod-event-by">by {e.by}</p>}
+          {e.ai && (
+            <details className="mod-ai-details">
+              <summary>
+                <Bot size={15} /> What the AI said
+              </summary>
+              <AiAnswer ai={e.ai} />
+            </details>
+          )}
+        </li>
+      ))}
     </ul>
   )
 }
@@ -449,12 +579,12 @@ function Users({ onUser }: { onUser: (id: string) => void }) {
       ) : !rows.length ? (
         <p className="empty">No one matches “{q}”.</p>
       ) : (
-        <ul className="board">
+        <ul className="mod-list">
           {rows.map((u) => (
             <li key={u.id}>
               <button className="mod-row" onClick={() => onUser(u.id)}>
-                <Avatar name={u.name} size={32} />
-                <div className="mod-event">
+                <Avatar name={u.name} size={36} />
+                <div className="mod-row-text">
                   <strong>
                     {u.name} <Badges user={u} />
                   </strong>
@@ -462,7 +592,7 @@ function Users({ onUser }: { onUser: (id: string) => void }) {
                     {u.school} · {amount(u.impact.co2)} kg CO₂ · {fmt(u.impact.water)} L · {fmt(u.impact.plastic)} plastic
                   </span>
                 </div>
-                <span className="board-pts num">{fmt(u.points)}</span>
+                <span className="mod-count num">{fmt(u.points)}</span>
               </button>
             </li>
           ))}
@@ -476,6 +606,7 @@ function UserSheet({ userId, onClose, onChange }: { userId: string | null; onClo
   const [user, setUser] = useState<AdminUserDetail | null>(null)
   const [takeBack, setTakeBack] = useState('')
   const [reason, setReason] = useState('')
+  const [snapId, setSnapId] = useState<string | null>(null)
 
   const load = useCallback(() => {
     if (userId) getAdminUser(userId).then(setUser, fail)
@@ -485,6 +616,7 @@ function UserSheet({ userId, onClose, onChange }: { userId: string | null; onClo
     setUser(null)
     setTakeBack('')
     setReason('')
+    setSnapId(null)
     load()
   }, [load])
 
@@ -514,6 +646,8 @@ function UserSheet({ userId, onClose, onChange }: { userId: string | null; onClo
     const note = prompt(`Why are you flagging ${user!.name}?`)
     if (note !== null) act(() => flagUser(user!.id, note))
   }
+
+  const snap = user?.snaps.find((s) => s.id === snapId)
 
   return (
     <Sheet open={!!userId} onClose={onClose}>
@@ -576,31 +710,48 @@ function UserSheet({ userId, onClose, onChange }: { userId: string | null; onClo
           )}
 
           <section className="mod-section">
-            <p className="label">Recent snaps</p>
+            <p className="label">Recent snaps · tap one to see what the AI said</p>
             {user.snaps.length ? (
               <div className="snaps">
                 {user.snaps.map((s) => (
-                  <figure key={s.id} className="snap">
-                    <img src={s.thumb} alt="" onError={hideBroken} />
-                    <button
-                      className="mod-revoke"
-                      onClick={() => act(() => revokeSnap(s.id), `Remove “${s.label}” and take back its ${s.points} pts${s.posted ? ' plus any Spotlight bonus' : ''}?`)}
-                    >
-                      Revoke
-                    </button>
-                    <figcaption>
-                      <span className="thumb-icon">
-                        <Glyph emoji={s.emoji} size={14} strokeWidth={2} />
-                      </span>
-                      <span>
-                        +{s.points} · {timeAgo(s.ts)}
-                      </span>
-                    </figcaption>
-                  </figure>
+                  <button key={s.id} className={`snap-open${s.id === snapId ? ' is-picked' : ''}`} onClick={() => setSnapId(s.id === snapId ? null : s.id)}>
+                    <figure className="snap">
+                      <img src={s.thumb} alt="" onError={hideBroken} />
+                      <figcaption>
+                        <span className="thumb-icon">
+                          <Glyph emoji={s.emoji} size={14} strokeWidth={2} />
+                        </span>
+                        <span>
+                          +{s.points} · {timeAgo(s.ts)}
+                        </span>
+                      </figcaption>
+                    </figure>
+                  </button>
                 ))}
               </div>
             ) : (
               <p className="empty">No snaps yet.</p>
+            )}
+            {snap && (
+              <div className="mod-snap">
+                <div className="mod-snap-head">
+                  <Glyph emoji={snap.emoji} size={16} strokeWidth={2} />
+                  <strong>{snap.label}</strong>
+                  <span className="mod-time">
+                    +{snap.points} pts · {timeAgo(snap.ts)}
+                    {snap.posted ? ' · shared' : ''}
+                  </span>
+                </div>
+                {snap.ai ? <AiAnswer ai={snap.ai} /> : <p className="mod-event-by">No AI answer was saved for this snap.</p>}
+                <button
+                  className="btn btn-danger btn-sm"
+                  onClick={() =>
+                    act(() => revokeSnap(snap.id), `Remove “${snap.label}” and take back its ${snap.points} pts${snap.posted ? ' plus any Spotlight bonus' : ''}?`)
+                  }
+                >
+                  Revoke snap
+                </button>
+              </div>
             )}
           </section>
 

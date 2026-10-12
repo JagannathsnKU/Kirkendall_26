@@ -17,15 +17,16 @@ export const REPORT_HIDE_AT = 3
 /** This many cheating signals in a day puts the user in the review queue. */
 const AUTO_FLAG = { kinds: ['screen', 'duplicate', 'rate_limit', 'trip'], count: 3, windowMs: 24 * 60 * 60 * 1000 }
 
-export function logEvent(sql: Query, userId: string, kind: string, detail = '', actorId: string | null = null) {
+/** `ai` is the AI's full answer behind the event, kept so admins can read exactly what it said. */
+export function logEvent(sql: Query, userId: string, kind: string, detail = '', actorId: string | null = null, ai: object | null = null) {
   return sql`
-    insert into events (user_id, actor_id, kind, detail, ts)
-    values (${userId}, ${actorId}, ${kind}, ${detail.slice(0, 200)}, ${Date.now()})`
+    insert into events (user_id, actor_id, kind, detail, ai, ts)
+    values (${userId}, ${actorId}, ${kind}, ${detail.slice(0, 500)}, ${ai ? JSON.stringify(ai).slice(0, 8000) : null}, ${Date.now()})`
 }
 
 /** Logs a cheating signal, and flags the user for review once they pile up. */
-export async function logSuspicious(sql: Sql, userId: string, kind: string, detail = '') {
-  await logEvent(sql, userId, kind, detail)
+export async function logSuspicious(sql: Sql, userId: string, kind: string, detail = '', ai: object | null = null) {
+  await logEvent(sql, userId, kind, detail, null, ai)
   const [{ n }] = await sql<{ n: number }[]>`
     select count(*)::int as n from events
     where user_id = ${userId} and kind in ${sql(AUTO_FLAG.kinds)} and ts > ${Date.now() - AUTO_FLAG.windowMs}`
@@ -52,6 +53,10 @@ export async function flagPost(sql: Query, postId: string, userId: string, reaso
 const REVIEW_PROPS = {
   verdict: { type: 'string', enum: ['ok', 'remove'], description: 'remove only if the post breaks a rule; otherwise ok.' },
   reason: { type: 'string', description: 'One short sentence for the moderator, max 20 words.' },
+  explanation: {
+    type: 'string',
+    description: 'For the moderator: what you see in the image, how it relates to the caption, and why you decided. 2 to 4 sentences.',
+  },
 }
 const REVIEW_SCHEMA = { type: 'object', properties: REVIEW_PROPS, required: Object.keys(REVIEW_PROPS) }
 
@@ -90,12 +95,16 @@ interface FlaggedPost {
   label: string
   score: number
   thumb: string
+  photo: string
   reported: string | null
 }
 
+const base64 = (dataUrl: string) => dataUrl.replace(/^data:image\/jpeg;base64,/, '')
+
 async function askAi(f: FlaggedPost): Promise<AiReview> {
-  if (process.env.VERIFY_MOCK === '1') return { verdict: 'ok', reason: 'Dev mode: AI review skipped.' }
-  const image = (await fetchImage(f.kind === 'video' ? f.poster : f.url)) ?? f.thumb.replace(/^data:image\/jpeg;base64,/, '')
+  if (process.env.VERIFY_MOCK === '1') return { verdict: 'ok', reason: 'Dev mode: AI review skipped.', explanation: 'VERIFY_MOCK is on, so no AI was asked.' }
+  const blob = f.url.startsWith('https://') ? await fetchImage(f.kind === 'video' ? f.poster : f.url) : null
+  const image = blob ?? base64(f.photo || f.thumb)
   const context =
     f.reason === 'downvotes'
       ? `Classmates voted it down to a score of ${f.score}.${f.reported ? ` Some reported it as: ${f.reported}.` : ''}`
@@ -104,7 +113,8 @@ async function askAi(f: FlaggedPost): Promise<AiReview> {
   const out = await askGemini([image], note + reviewPrompt(f.label, context), REVIEW_SCHEMA, 15_000)
   return {
     verdict: out.verdict === 'remove' ? 'remove' : 'ok',
-    reason: String(out.reason ?? '').trim().slice(0, 160) || 'No reason given.',
+    reason: String(out.reason ?? '').trim().slice(0, 300) || 'No reason given.',
+    explanation: String(out.explanation ?? '').trim().slice(0, 1500),
   }
 }
 
@@ -115,7 +125,7 @@ async function askAi(f: FlaggedPost): Promise<AiReview> {
  */
 export async function reviewFlag(sql: Sql, flagId: string) {
   const [f] = await sql<FlaggedPost[]>`
-    select f.reason, p.id as post_id, p.user_id, p.kind, p.url, p.poster, p.label, p.score, s.thumb,
+    select f.reason, p.id as post_id, p.user_id, p.kind, p.url, p.poster, p.label, p.score, s.thumb, s.photo,
       (select string_agg(distinct r.reason, ', ') from reports r where r.post_id = p.id) as reported
     from flags f
     join posts p on p.id = f.post_id
@@ -130,18 +140,20 @@ export async function reviewFlag(sql: Sql, flagId: string) {
     console.error('AI review failed', e)
     review = { verdict: 'error', reason: e instanceof HttpError ? e.message : 'AI review failed.' }
   }
-  await sql`update flags set ai_verdict = ${review.verdict}, ai_reason = ${review.reason} where id = ${flagId}`
+  await sql`
+    update flags set ai_verdict = ${review.verdict}, ai_reason = ${review.reason}, ai_explanation = ${review.explanation ?? ''}
+    where id = ${flagId}`
   if (review.verdict === 'remove') {
     await sql`update posts set hidden = true where id = ${f.post_id}`
-    await logEvent(sql, f.user_id, 'ai_hidden', `${f.label}: ${review.reason}`)
+    await logEvent(sql, f.user_id, 'ai_hidden', `${f.label}: ${review.reason}`, null, review)
   } else if (review.verdict === 'ok') {
     await sql`update posts set hidden = false where id = ${f.post_id}`
   }
 }
 
-/** Deletes Blob files, without holding up the response if storage is slow. */
+/** Deletes Blob files, without holding up the response if storage is slow. Our own /api URLs aren't in Blob. */
 export async function removeMedia(urls: (string | null)[]) {
-  const list = urls.filter((u): u is string => !!u)
+  const list = urls.filter((u): u is string => !!u?.startsWith('https://'))
   if (!list.length || !process.env.BLOB_READ_WRITE_TOKEN) return
   const removal = del(list).catch((e) => console.error('Blob delete failed', e))
   await Promise.race([removal, new Promise((resolve) => setTimeout(resolve, 5000))])
