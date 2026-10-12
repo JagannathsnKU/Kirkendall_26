@@ -9,6 +9,8 @@ export interface Photo {
   /** Base64 JPEGs sent to the AI check. One for a photo, several for a video. */
   frames: string[]
   thumb: string
+  /** Mid-size JPEG data URL the student sees when they open the snap later. */
+  image: string
   hash: string
   source: 'camera' | 'upload'
   video?: Blob
@@ -18,6 +20,7 @@ export const MAX_RECORD_SECONDS = 10
 export const MAX_VIDEO_SECONDS = 30
 const MAX_VIDEO_BYTES = 60 * 1024 * 1024
 const FRAMES = 4
+const IMAGE_SIDE = 640
 
 type Source = HTMLVideoElement | HTMLImageElement
 
@@ -76,6 +79,7 @@ export function capture(src: Source, source: Photo['source'] = 'camera'): Photo 
     preview: render(src, 1080, 0.82),
     frames: [base64(render(src, 768, 0.8))],
     thumb: render(src, 240, 0.7, true),
+    image: render(src, IMAGE_SIDE, 0.72),
     hash: dhash(src),
     source,
   }
@@ -119,6 +123,7 @@ export async function fromStills(stills: string[], video: Blob, source: Photo['s
     preview: middle.src,
     frames: picked.map(base64),
     thumb: render(middle, 240, 0.7, true),
+    image: render(middle, IMAGE_SIDE, 0.72),
     hash: dhash(middle),
     source,
     video,

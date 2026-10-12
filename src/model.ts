@@ -27,6 +27,18 @@ export interface Snap {
   thumb: string
 }
 
+/** Everything shown when a student opens one of their snaps. */
+export interface SnapDetail {
+  /** Larger image than the thumbnail; empty for snaps from before it was stored. */
+  photo: string
+  impact: Impact | null
+  headline: string | null
+  analogy: string | null
+  analogyEmoji: string | null
+  /** The clip or photo, if it was shared to Spotlight. */
+  post: { kind: MediaKind; url: string; poster: string | null; score: number } | null
+}
+
 /** A snap shared to the poster's school Spotlight. */
 export interface Post {
   id: string
@@ -79,12 +91,20 @@ export interface AdminSummary {
   unread: number
 }
 
+/** Totals across every student, for the top of the admin dashboard. */
+export interface AdminOverview {
+  students: number
+  snapsThisWeek: number
+  impact: Impact
+}
+
 export interface AdminUserRow {
   id: string
   name: string
   email: string
   school: string
   points: number
+  impact: Impact
   banned: boolean
   flagged: boolean
   admin: boolean
@@ -113,6 +133,22 @@ export interface AdminUserDetail extends AdminUserRow {
 export interface AiReview {
   verdict: 'ok' | 'remove' | 'error'
   reason: string
+}
+
+/** A Spotlight post as admins see it: any school, including hidden ones. */
+export interface AdminPost {
+  id: string
+  kind: MediaKind
+  url: string
+  poster: string | null
+  label: string
+  emoji: string
+  score: number
+  hidden: boolean
+  reports: number
+  points: number
+  ts: number
+  user: { id: string; name: string; school: string }
 }
 
 /** An open item in the admin review queue: a post that was voted down or reported, or a user. */
@@ -193,5 +229,3 @@ export interface SnapResult {
 export type SubmitOutcome =
   | { ok: true; result: SnapResult }
   | { ok: false; kind: 'limit' | 'duplicate' | 'rejected' | 'error'; message: string }
-
-export const DAILY_LIMIT = 2

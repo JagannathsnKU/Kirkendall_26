@@ -5,12 +5,14 @@ import {
   SUSPICIOUS_EVENTS,
   type ActivityEvent,
   type AdminActivity,
+  type AdminOverview,
+  type AdminPost,
   type AdminSummary,
   type AdminUserDetail,
   type AdminUserRow,
   type FlagItem,
 } from '../src/model.ts'
-import { isAdmin, requireAdmin } from './auth.ts'
+import { isAdmin, notAdmin, requireAdmin } from './auth.ts'
 import { db, type Sql } from './db.ts'
 import { HttpError, readJson, str } from './http.ts'
 import { flagUser, logEvent, reviewFlag, revokeSnap, takeDown } from './moderation.ts'
@@ -24,6 +26,10 @@ interface UserCols {
   email: string
   university_id: string
   points: number
+  co2: number
+  kwh: number
+  water: number
+  plastic: number
   banned: boolean
   flagged: boolean
 }
@@ -34,13 +40,14 @@ const toRow = (u: UserCols): AdminUserRow => ({
   email: u.email,
   school: universityById(u.university_id).short,
   points: u.points,
+  impact: { co2: u.co2, kwh: u.kwh, water: u.water, plastic: u.plastic },
   banned: u.banned,
   flagged: u.flagged,
   admin: isAdmin(u.email),
 })
 
 const userCols = (sql: Sql) => sql`
-  u.id, u.name, u.email, u.university_id, u.points, u.banned,
+  u.id, u.name, u.email, u.university_id, u.points, u.co2, u.kwh, u.water, u.plastic, u.banned,
   exists (select 1 from flags f where f.user_id = u.id and f.kind = 'user' and f.status = 'open') as flagged`
 
 const toEvent = (e: { id: string; user_id: string; name: string; kind: string; detail: string; by: string | null; ts: string }): ActivityEvent => ({
@@ -63,6 +70,44 @@ export async function summary(req: IncomingMessage): Promise<AdminSummary> {
       count(*) filter (where f.ts > (select admin_seen_at from users where id = ${adminId}))::int as unread
     from flags f where f.status = 'open'`
   return row
+}
+
+export async function overview(req: IncomingMessage): Promise<AdminOverview> {
+  const sql = await db()
+  await requireAdmin(sql, req)
+  const [totals] = await sql<{ students: number; co2: number; kwh: number; water: number; plastic: number }[]>`
+    select count(*)::int as students, coalesce(sum(co2), 0)::float as co2, coalesce(sum(kwh), 0)::float as kwh,
+      coalesce(sum(water), 0)::int as water, coalesce(sum(plastic), 0)::int as plastic
+    from users where ${notAdmin(sql)}`
+  const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from snaps where ts > ${Date.now() - WEEK_MS}`
+  const { students, ...impact } = totals
+  return { students, snapsThisWeek: n, impact }
+}
+
+/** Every school's Spotlight, newest first, including posts hidden for review. */
+export async function posts(req: IncomingMessage): Promise<AdminPost[]> {
+  const sql = await db()
+  await requireAdmin(sql, req)
+  const rows = await sql`
+    select p.id, p.kind, p.url, p.poster, p.label, p.emoji, p.score, p.hidden, p.bonus, p.ts, s.points,
+      u.id as user_id, u.name, u.university_id,
+      (select count(*)::int from reports r where r.post_id = p.id) as reports
+    from posts p join users u on u.id = p.user_id join snaps s on s.id = p.snap_id
+    order by p.ts desc limit 60`
+  return rows.map((r) => ({
+    id: r.id,
+    kind: r.kind,
+    url: r.url,
+    poster: r.poster,
+    label: r.label,
+    emoji: r.emoji,
+    score: r.score,
+    hidden: r.hidden,
+    reports: r.reports,
+    points: r.points + r.bonus,
+    ts: Number(r.ts),
+    user: { id: r.user_id, name: r.name, school: universityById(r.university_id).short },
+  }))
 }
 
 export async function markSeen(req: IncomingMessage) {
@@ -128,7 +173,7 @@ export async function activity(req: IncomingMessage): Promise<AdminActivity> {
   const top = await sql<{ user_id: string; name: string; n: number }[]>`
     select e.user_id, u.name, count(*)::int as n
     from events e join users u on u.id = e.user_id
-    where e.kind in ${sql(SUSPICIOUS_EVENTS)} and e.ts > ${Date.now() - WEEK_MS}
+    where e.kind in ${sql(SUSPICIOUS_EVENTS)} and e.ts > ${Date.now() - WEEK_MS} and ${notAdmin(sql)}
     group by e.user_id, u.name order by n desc limit 5`
   return {
     top: top.map((t) => ({ userId: t.user_id, name: t.name, count: t.n })),
@@ -143,8 +188,8 @@ export async function users(req: IncomingMessage): Promise<AdminUserRow[]> {
   const rows = await sql<UserCols[]>`
     select ${userCols(sql)} from users u
     where ${q} = '' or position(${q} in lower(u.name)) > 0 or position(${q} in u.email) > 0
-    order by u.points desc limit 50`
-  return rows.map(toRow)
+    order by u.points desc limit 60`
+  return rows.filter((u) => !isAdmin(u.email)).map(toRow)
 }
 
 export async function user(req: IncomingMessage): Promise<AdminUserDetail> {

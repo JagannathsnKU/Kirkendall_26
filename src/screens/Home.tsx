@@ -1,18 +1,22 @@
 import { useEffect, useState } from 'react'
-import { Camera, ChevronRight, Download, Play, ShieldCheck, X } from 'lucide-react'
-import { getStudentLeaderboard } from '../api'
-import { KM_PER_KG_CO2, REWARDS, actionById, fmt, universityById } from '../data'
+import { Camera, ChevronRight, Download, Play, Sparkles, X } from 'lucide-react'
+import { getSnapDetail, getStudentLeaderboard } from '../api'
+import { MILES_PER_KG_CO2, REWARDS, SNAP_TTL_DAYS, actionById, fmt, universityById } from '../data'
 import { useInstall } from '../install'
+import type { Snap, SnapDetail } from '../model'
 import { go } from '../router'
 import { useStore } from '../store'
 import { dayKey, nextMilestone, streakNow, type Streak } from '../streak'
 import { Tree } from '../tree'
-import { Avatar, Bar, CountUp, Logo, timeAgo } from '../ui'
+import { Avatar, Bar, CountUp, ImpactStats, Logo, Sheet, amount, timeAgo } from '../ui'
+
+const DAY_MS = 24 * 60 * 60 * 1000
 
 export default function Home() {
-  const { session, openCamera, alerts } = useStore()
+  const { session, openCamera } = useStore()
   const { mode, install } = useInstall()
   const [rank, setRank] = useState<number | null>(null)
+  const [open, setOpen] = useState<Snap | null>(null)
   const [hideInstall, setHideInstall] = useState(() => localStorage.getItem('ecou:hide-install') === '1')
   const { user, snaps } = session!
   const uni = universityById(user.universityId)
@@ -35,17 +39,9 @@ export default function Home() {
     <div className="page">
       <header className="top">
         <Logo />
-        <div className="top-actions">
-          {user.admin && (
-            <button className="icon-btn admin-btn" onClick={() => go('admin')} aria-label={`Admin, ${alerts?.open ?? 0} to review`}>
-              <ShieldCheck size={20} />
-              {!!alerts?.open && <span className={`badge ${alerts.unread ? 'is-new' : ''}`}>{alerts.open}</span>}
-            </button>
-          )}
-          <button onClick={() => go('me')} aria-label="Profile">
-            <Avatar name={user.name} size={36} />
-          </button>
-        </div>
+        <button onClick={() => go('me')} aria-label="Profile">
+          <Avatar name={user.name} size={36} />
+        </button>
       </header>
 
       {mode && !hideInstall && (
@@ -105,28 +101,30 @@ export default function Home() {
             <span>L water</span>
           </div>
         </div>
-        {user.impact.co2 > 0 && <p className="analogy-line">🚗 Like not driving {fmt(user.impact.co2 * KM_PER_KG_CO2)} km</p>}
+        {user.impact.co2 > 0 && <p className="analogy-line">🚗 Like not driving {amount(user.impact.co2 * MILES_PER_KG_CO2)} miles</p>}
       </section>
 
       <section>
-        <p className="label pad">Recent</p>
+        <p className="label pad">This week</p>
         {snaps.length ? (
           <div className="snaps">
             {snaps.slice(0, 9).map((s) => (
-              <figure key={s.id} className="snap">
-                <img src={s.thumb} alt="" />
-                {s.kind === 'video' && (
-                  <span className="snap-play" aria-label="Video">
-                    <Play size={12} fill="currentColor" />
-                  </span>
-                )}
-                <figcaption>
-                  <span>{s.emoji ?? actionById(s.actionId)?.emoji}</span>
-                  <span>
-                    +{s.points} · {timeAgo(s.ts)}
-                  </span>
-                </figcaption>
-              </figure>
+              <button key={s.id} className="snap-open" onClick={() => setOpen(s)} aria-label={`Open ${s.label} snap`}>
+                <figure className="snap">
+                  <img src={s.thumb} alt="" />
+                  {s.kind === 'video' && (
+                    <span className="snap-play" aria-label="Video">
+                      <Play size={12} fill="currentColor" />
+                    </span>
+                  )}
+                  <figcaption>
+                    <span>{s.emoji ?? actionById(s.actionId)?.emoji}</span>
+                    <span>
+                      +{s.points} · {timeAgo(s.ts)}
+                    </span>
+                  </figcaption>
+                </figure>
+              </button>
             ))}
           </div>
         ) : (
@@ -136,7 +134,77 @@ export default function Home() {
           </button>
         )}
       </section>
+
+      <SnapSheet snap={open} onClose={() => setOpen(null)} />
     </div>
+  )
+}
+
+function SnapSheet({ snap, onClose }: { snap: Snap | null; onClose: () => void }) {
+  const [detail, setDetail] = useState<SnapDetail | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setDetail(null)
+    setError(null)
+    if (snap) getSnapDetail(snap.id).then(setDetail, (e: Error) => setError(e.message))
+  }, [snap])
+
+  if (!snap) return null
+  const daysLeft = Math.max(1, Math.ceil((snap.ts + SNAP_TTL_DAYS * DAY_MS - Date.now()) / DAY_MS))
+  const post = detail?.post
+  const image = post?.kind === 'photo' ? post.url : detail?.photo || snap.thumb
+  const when = new Date(snap.ts).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+
+  return (
+    <Sheet open onClose={onClose}>
+      <div className="snap-detail">
+        <div className="snap-detail-media">
+          {post?.kind === 'video' ? (
+            <video src={post.url} poster={post.poster ?? image} controls autoPlay loop muted playsInline />
+          ) : (
+            <img src={image} alt={snap.label} />
+          )}
+        </div>
+
+        <div className="snap-detail-head">
+          <span className="snap-detail-emoji">{snap.emoji}</span>
+          <div>
+            <strong>{snap.label}</strong>
+            <span>{when}</span>
+          </div>
+          <strong className="snap-detail-pts">+{snap.points}</strong>
+        </div>
+
+        {error ? (
+          <p className="empty">{error}</p>
+        ) : !detail ? (
+          <div className="spot-loading">
+            <span className="spinner" />
+          </div>
+        ) : (
+          <>
+            {detail.analogy && (
+              <section className="analogy snap-analogy">
+                <span className="analogy-emoji">{detail.analogyEmoji}</span>
+                <p className="analogy-text">{detail.analogy}</p>
+                {detail.headline && <p className="analogy-fact">{detail.headline}</p>}
+              </section>
+            )}
+            {detail.impact && <ImpactStats impact={detail.impact} compact />}
+            {post && (
+              <p className="snap-detail-note">
+                <Sparkles size={14} /> Shared to Spotlight · {post.score} {Math.abs(post.score) === 1 ? 'vote' : 'votes'}
+              </p>
+            )}
+          </>
+        )}
+
+        <p className="snap-detail-note">
+          Snaps disappear after {SNAP_TTL_DAYS} days; this one in {daysLeft} {daysLeft === 1 ? 'day' : 'days'}. Your points and impact stay.
+        </p>
+      </div>
+    </Sheet>
   )
 }
 

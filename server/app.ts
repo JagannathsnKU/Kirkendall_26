@@ -1,13 +1,24 @@
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { REWARDS, SEED_STUDENTS, SEED_UNIVERSITY_POINTS, UNIVERSITIES, actionById, universityById, type Action } from '../src/data.ts'
-import { DAILY_LIMIT, type Session, type SnapResult, type StudentRow, type SubmitOutcome, type UniversityRow, type User } from '../src/model.ts'
+import {
+  REWARDS,
+  SEED_STUDENTS,
+  SEED_UNIVERSITY_POINTS,
+  SNAP_TTL_DAYS,
+  UNIVERSITIES,
+  actionById,
+  dailyLimit,
+  universityById,
+  type Action,
+  type Impact,
+} from '../src/data.ts'
+import type { Session, SnapDetail, SnapResult, StudentRow, SubmitOutcome, UniversityRow, User } from '../src/model.ts'
 import { emptyStreak, recordDay } from '../src/streak.ts'
 import * as admin from './admin.ts'
-import { checkPassword, endSession, hashPassword, isAdmin, requireUser, startSession } from './auth.ts'
+import { checkPassword, endSession, hashPassword, isAdmin, notAdmin, requireUser, startSession } from './auth.ts'
 import { db, dbConfigured, type Sql } from './db.ts'
 import { HttpError, readJson, send, str } from './http.ts'
-import { logEvent, logSuspicious } from './moderation.ts'
+import { logEvent, logSuspicious, removeMedia } from './moderation.ts'
 import { createPost, deletePost, listPosts, mediaToken, report, vote } from './spotlight.ts'
 import { ANTI_CHEAT, OTHER_ID, verifyPhoto } from './verify.ts'
 
@@ -15,8 +26,12 @@ const RATE_LIMIT = 20
 /** Someone hammering the rate limit is logged once per this window, not on every blocked request. */
 const RATE_LIMIT_LOG_MS = 10 * 60 * 1000
 const DUPLICATE_DISTANCE = 6
+const RECENT_HASHES = 500
 const RECENT_SNAPS = 20
 const MAX_FRAMES = 6
+const MAX_PHOTO_CHARS = 160_000
+const SNAP_TTL_MS = SNAP_TTL_DAYS * 24 * 60 * 60 * 1000
+const CLEANUP_EVERY_MS = 10 * 60 * 1000
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 interface UserRow {
@@ -63,7 +78,25 @@ function hammingDistance(a: string, b: string) {
   return d
 }
 
+let lastCleanup = 0
+
+/** Deletes week-old snaps and their Spotlight media. Runs at most every few minutes per server. */
+async function cleanup(sql: Sql) {
+  if (Date.now() - lastCleanup < CLEANUP_EVERY_MS) return
+  lastCleanup = Date.now()
+  const cutoff = Date.now() - SNAP_TTL_MS
+  try {
+    const media = await sql<{ url: string; poster: string | null }[]>`
+      select p.url, p.poster from posts p join snaps s on s.id = p.snap_id where s.ts < ${cutoff}`
+    await sql`delete from snaps where ts < ${cutoff}`
+    await removeMedia(media.flatMap((m) => [m.url, m.poster]))
+  } catch (e) {
+    console.error('Cleanup failed', e)
+  }
+}
+
 async function loadSession(sql: Sql, userId: string): Promise<Session> {
+  await cleanup(sql)
   const [user] = await sql<UserRow[]>`select * from users where id = ${userId}`
   if (!user) throw new HttpError(401, 'Please log in again.')
   const snaps = await sql`
@@ -98,13 +131,13 @@ function profile(body: Record<string, unknown>) {
 async function studentRank(sql: Sql, universityId: string, userId: string, points: number) {
   const [{ n }] = await sql<{ n: number }[]>`
     select count(*)::int as n from users
-    where university_id = ${universityId} and id <> ${userId} and points > ${points} and not banned`
+    where university_id = ${universityId} and id <> ${userId} and points > ${points} and not banned and ${notAdmin(sql)}`
   return 1 + n + SEED_STUDENTS.filter((s) => s.points > points).length
 }
 
 async function schools(sql: Sql, universityId: string): Promise<UniversityRow[]> {
   const totals = await sql<{ university_id: string; points: number }[]>`
-    select university_id, sum(points)::int as points from users where not banned group by university_id`
+    select university_id, sum(points)::int as points from users where not banned and ${notAdmin(sql)} group by university_id`
   return UNIVERSITIES.map((u) => ({
     ...u,
     points: SEED_UNIVERSITY_POINTS[u.id] + (totals.find((t) => t.university_id === u.id)?.points ?? 0),
@@ -172,15 +205,24 @@ async function snap(req: IncomingMessage): Promise<SubmitOutcome> {
     .filter((f): f is string => typeof f === 'string' && f.length > 0 && f.length < 600_000)
     .slice(0, MAX_FRAMES)
   const thumb = typeof body.thumb === 'string' && body.thumb.startsWith('data:image/jpeg;base64,') ? body.thumb.slice(0, 80_000) : ''
+  const photo =
+    typeof body.photo === 'string' && body.photo.startsWith('data:image/jpeg;base64,') && body.photo.length <= MAX_PHOTO_CHARS ? body.photo : ''
   const hash = typeof body.hash === 'string' && /^[0-9a-f]{16}$/.test(body.hash) ? body.hash : ''
   const source = body.source === 'upload' ? 'upload' : 'camera'
   const description = typeof body.description === 'string' ? body.description.replace(/[\r\n<>]+/g, ' ').trim().slice(0, 80) : undefined
   const preset = actionById(actionId)
   if (!preset && actionId !== OTHER_ID) throw new HttpError(400, 'Unknown action.')
   if (!frames.length || !thumb) throw new HttpError(400, 'Missing photo.')
+  const [{ email }] = await sql<{ email: string }[]>`select email from users where id = ${userId}`
+  if (isAdmin(email)) throw new HttpError(403, 'Admin accounts don’t log snaps.')
 
   const day = today(req)
-  const limitHit: SubmitOutcome = { ok: false, kind: 'limit', message: `You’ve logged this ${DAILY_LIMIT} times today. Come back tomorrow!` }
+  const limit = dailyLimit(actionId)
+  const limitHit: SubmitOutcome = {
+    ok: false,
+    kind: 'limit',
+    message: `This counts ${limit === 1 ? 'once' : `${limit} times`} a day. Come back tomorrow!`,
+  }
 
   if (ANTI_CHEAT) {
     const now = Date.now()
@@ -196,10 +238,10 @@ async function snap(req: IncomingMessage): Promise<SubmitOutcome> {
 
     const [used] = await sql<{ n: number }[]>`
       select count(*)::int as n from snaps where user_id = ${userId} and action_id = ${actionId} and day = ${day}`
-    if (used.n >= DAILY_LIMIT) return limitHit
+    if (used.n >= limit) return limitHit
     if (hash) {
       const seen = await sql<{ hash: string }[]>`
-        select hash from snaps where user_id = ${userId} and hash <> '' order by ts desc limit 200`
+        select hash from photo_hashes where user_id = ${userId} order by ts desc limit ${RECENT_HASHES}`
       if (seen.some((s) => hammingDistance(s.hash, hash) <= DUPLICATE_DISTANCE)) {
         await logSuspicious(sql, userId, 'duplicate', actionById(actionId)?.label ?? actionId)
         return { ok: false, kind: 'duplicate', message: 'This looks like a photo you already used. Snap a new one!' }
@@ -226,7 +268,7 @@ async function snap(req: IncomingMessage): Promise<SubmitOutcome> {
       // Checked again under the row lock so two photos sent at once can't both get past the limit.
       const [used] = await tx<{ n: number }[]>`
         select count(*)::int as n from snaps where user_id = ${userId} and action_id = ${actionId} and day = ${day}`
-      if (used.n >= DAILY_LIMIT) return null
+      if (used.n >= limit) return null
     }
     const streak = JSON.parse(u.streak)
     const update = recordDay(streak, day)
@@ -241,9 +283,16 @@ async function snap(req: IncomingMessage): Promise<SubmitOutcome> {
         streak = ${JSON.stringify(streak)}
       where id = ${userId}`
     const snapId = randomUUID()
+    const now = Date.now()
     await tx`
-      insert into snaps (id, user_id, action_id, label, emoji, kind, points, day, ts, thumb, hash)
-      values (${snapId}, ${userId}, ${action.id}, ${action.label}, ${action.emoji}, ${kind}, ${action.points}, ${day}, ${Date.now()}, ${thumb}, ${hash})`
+      insert into snaps (id, user_id, action_id, label, emoji, kind, points, day, ts, thumb, hash, photo, impact, headline, analogy, analogy_emoji)
+      values (${snapId}, ${userId}, ${action.id}, ${action.label}, ${action.emoji}, ${kind}, ${action.points}, ${day}, ${now}, ${thumb}, ${hash},
+        ${photo}, ${JSON.stringify(action.impact)}, ${action.headline}, ${action.analogy}, ${action.analogyEmoji})`
+    if (hash) {
+      await tx`
+        insert into photo_hashes (user_id, hash, ts) values (${userId}, ${hash}, ${now})
+        on conflict (user_id, hash) do update set ts = excluded.ts`
+    }
     return { snapId, before: u.points, total, streak: update, universityId: u.university_id }
   })
   if (!award) return limitHit
@@ -262,13 +311,35 @@ async function snap(req: IncomingMessage): Promise<SubmitOutcome> {
   return { ok: true, result }
 }
 
+async function snapDetail(req: IncomingMessage): Promise<SnapDetail> {
+  const sql = await db()
+  const userId = await requireUser(sql, req)
+  const id = str(new URL(req.url ?? '/', 'http://localhost').searchParams.get('id'), 64)
+  const [s] = await sql`
+    select s.action_id, s.photo, s.impact, s.headline, s.analogy, s.analogy_emoji,
+      p.kind as post_kind, p.url, p.poster, p.score
+    from snaps s left join posts p on p.snap_id = s.id
+    where s.id = ${id} and s.user_id = ${userId}`
+  if (!s) throw new HttpError(404, 'This snap has expired.')
+  // Snaps from before impact was stored fall back to the action's standard card.
+  const preset = actionById(s.action_id)
+  return {
+    photo: s.photo,
+    impact: s.impact ? (JSON.parse(s.impact) as Impact) : (preset?.impact ?? null),
+    headline: s.headline ?? preset?.headline ?? null,
+    analogy: s.analogy ?? preset?.analogy ?? null,
+    analogyEmoji: s.analogy_emoji ?? preset?.analogyEmoji ?? null,
+    post: s.url ? { kind: s.post_kind, url: s.url, poster: s.poster, score: s.score } : null,
+  }
+}
+
 async function studentBoard(req: IncomingMessage): Promise<StudentRow[]> {
   const sql = await db()
   const userId = await requireUser(sql, req)
   const [me] = await sql<UserRow[]>`select * from users where id = ${userId}`
   const real = await sql<{ id: string; name: string; points: number }[]>`
     select id, name, points from users
-    where university_id = ${me.university_id} and not banned order by points desc, created_at limit 100`
+    where university_id = ${me.university_id} and not banned and ${notAdmin(sql)} order by points desc, created_at limit 100`
   const rows = [...real.map((r) => ({ ...r, me: r.id === userId })), ...SEED_STUDENTS.map((s) => ({ ...s, me: false }))]
   if (!rows.some((r) => r.me)) rows.push({ id: me.id, name: me.name, points: me.points, me: true })
   return rows.sort((a, b) => b.points - a.points || Number(b.me) - Number(a.me))
@@ -312,6 +383,7 @@ const ROUTES: Record<string, (req: IncomingMessage) => Promise<unknown>> = {
   'GET /api/me': me,
   'PATCH /api/me': updateMe,
   'POST /api/snap': snap,
+  'GET /api/snap': snapDetail,
   'GET /api/leaderboard/students': studentBoard,
   'GET /api/leaderboard/schools': schoolBoard,
   'POST /api/redeem': redeem,
@@ -322,6 +394,8 @@ const ROUTES: Record<string, (req: IncomingMessage) => Promise<unknown>> = {
   'POST /api/vote': vote,
   'POST /api/report': report,
   'GET /api/admin/summary': admin.summary,
+  'GET /api/admin/overview': admin.overview,
+  'GET /api/admin/posts': admin.posts,
   'POST /api/admin/seen': admin.markSeen,
   'GET /api/admin/queue': admin.queue,
   'GET /api/admin/activity': admin.activity,

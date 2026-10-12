@@ -36,8 +36,6 @@ function Screen({ route }: { route: string }) {
       return <Rewards />
     case 'me':
       return <Me />
-    case 'admin':
-      return <Admin />
     default:
       return <Home />
   }
@@ -47,14 +45,26 @@ export default function App() {
   const route = useRoute()
   const { ready, session } = useStore()
   const signedIn = !!session
+  const isAdmin = !!session?.user.admin
 
   useEffect(() => {
     if (!ready) return
     if (!signedIn && !PUBLIC.has(route)) go('welcome', { replace: true })
+    else if (isAdmin && route !== 'admin') go('admin', { replace: true })
     else if (signedIn && (route === '' || route === 'welcome' || route === 'login')) go('home', { replace: true })
-  }, [ready, signedIn, route])
+  }, [ready, signedIn, isAdmin, route])
 
   if (!ready || (!signedIn && !PUBLIC.has(route))) return null
+
+  // Admins get only the moderation dashboard, none of the student app.
+  if (isAdmin)
+    return (
+      <div className="app is-full">
+        <main className="screen">
+          <Admin />
+        </main>
+      </div>
+    )
 
   return (
     <div className={`app ${FULLSCREEN.has(route) ? 'is-full' : ''}`}>

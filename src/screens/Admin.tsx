@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Bell, Bot, ChevronRight, Flag, Search, ShieldCheck } from 'lucide-react'
+import { Bell, Bot, ChevronRight, Flag, LogOut, Search, ShieldCheck } from 'lucide-react'
 import { alertsOn, alertsSupported, enableAlerts } from '../alerts'
 import {
   decideFlag,
   flagUser,
   getAdminActivity,
+  getAdminOverview,
+  getAdminPosts,
   getAdminQueue,
   getAdminUser,
   getAdminUsers,
@@ -12,14 +14,18 @@ import {
   reviewFlag,
   revokeSnap,
   setSuspended,
+  signOut,
+  takeDownPost,
   takePoints,
 } from '../api'
-import { fmt } from '../data'
+import { MILES_PER_KG_CO2, fmt } from '../data'
 import {
   EVENT_LABELS,
   REPORT_REASONS,
   type ActivityEvent,
   type AdminActivity,
+  type AdminOverview,
+  type AdminPost,
   type AdminUserDetail,
   type AdminUserRow,
   type AiReview,
@@ -27,12 +33,13 @@ import {
 } from '../model'
 import { go } from '../router'
 import { useStore } from '../store'
-import { Avatar, Sheet, timeAgo } from '../ui'
+import { Avatar, ImpactStats, Logo, Sheet, amount, timeAgo } from '../ui'
 
-type Tab = 'queue' | 'activity' | 'users'
+type Tab = 'queue' | 'posts' | 'activity' | 'users'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'queue', label: 'Queue' },
+  { id: 'posts', label: 'Posts' },
   { id: 'activity', label: 'Activity' },
   { id: 'users', label: 'Users' },
 ]
@@ -40,23 +47,34 @@ const TABS: { id: Tab; label: string }[] = [
 const fail = (e: unknown) => alert((e as Error).message)
 
 export default function Admin() {
-  const { session, alerts, checkAlerts } = useStore()
+  const { session, alerts, checkAlerts, refresh } = useStore()
   const [tab, setTab] = useState<Tab>('queue')
   const [userId, setUserId] = useState<string | null>(null)
   const [notify, setNotify] = useState(alertsOn)
-  const isAdmin = !!session?.user.admin
+  if (!session?.user.admin) return null
 
-  useEffect(() => {
-    if (!isAdmin) go('home', { replace: true })
-  }, [isAdmin])
-  if (!isAdmin) return null
+  const leave = async () => {
+    if (!confirm('Sign out of the admin dashboard?')) return
+    await signOut()
+    await refresh()
+    go('welcome', { replace: true })
+  }
 
   return (
     <div className="page">
+      <header className="top">
+        <Logo />
+        <button className="icon-btn" onClick={leave} aria-label="Sign out">
+          <LogOut size={18} />
+        </button>
+      </header>
+
       <div>
         <h1 className="title">Admin</h1>
         <p className="sub">Reports, flags, and suspicious activity at every school.</p>
       </div>
+
+      <Overview />
 
       {alertsSupported && !notify && (
         <div className="install">
@@ -78,6 +96,7 @@ export default function Admin() {
       </div>
 
       {tab === 'queue' && <Queue onUser={setUserId} onChange={checkAlerts} />}
+      {tab === 'posts' && <Posts onUser={setUserId} />}
       {tab === 'activity' && <Activity onUser={setUserId} />}
       {tab === 'users' && <Users onUser={setUserId} />}
 
@@ -91,6 +110,94 @@ function Loading() {
     <div className="spot-loading">
       <span className="spinner" />
     </div>
+  )
+}
+
+function Overview() {
+  const [data, setData] = useState<AdminOverview | null>(null)
+
+  useEffect(() => {
+    getAdminOverview().then(setData, () => {})
+  }, [])
+
+  if (!data) return null
+  return (
+    <section className="card">
+      <p className="label">
+        {fmt(data.students)} students · {fmt(data.snapsThisWeek)} snaps this week
+      </p>
+      <ImpactStats impact={data.impact} />
+      {data.impact.co2 > 0 && <p className="analogy-line">🚗 Like not driving {amount(data.impact.co2 * MILES_PER_KG_CO2)} miles</p>}
+    </section>
+  )
+}
+
+/* ───────── Posts ───────── */
+
+function Posts({ onUser }: { onUser: (id: string) => void }) {
+  const [posts, setPosts] = useState<AdminPost[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(() => getAdminPosts().then(setPosts, (e: Error) => setError(e.message)), [])
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const takeDown = async (p: AdminPost, revoke: boolean) => {
+    const question = revoke
+      ? `Take down ${p.user.name}’s post and take back its ${p.points} pts?`
+      : `Take down ${p.user.name}’s post for everyone?`
+    if (!confirm(question)) return
+    try {
+      await takeDownPost(p.id, revoke)
+    } catch (e) {
+      fail(e)
+    }
+    load()
+  }
+
+  if (error) return <p className="empty">{error}</p>
+  if (!posts) return <Loading />
+  if (!posts.length) return <p className="empty">No one has shared to Spotlight yet.</p>
+  return (
+    <ul className="spots">
+      {posts.map((p) => (
+        <li key={p.id} className="spot mod">
+          <header className="mod-top">
+            {p.hidden && <span className="mod-tag is-downvotes">Hidden</span>}
+            {p.reports > 0 && <span className="mod-tag is-reports">Reported {p.reports}×</span>}
+            <span className="mod-time">{timeAgo(p.ts)}</span>
+          </header>
+          <button className="mod-user" onClick={() => onUser(p.user.id)}>
+            <Avatar name={p.user.name} size={34} />
+            <div>
+              <strong>{p.user.name}</strong>
+              <span>
+                {p.emoji} {p.label} · {p.user.school} · score {p.score}
+              </span>
+            </div>
+            <ChevronRight size={18} className="chev" />
+          </button>
+          <div className="spot-media mod-media">
+            {p.kind === 'video' ? (
+              <video src={p.url} poster={p.poster ?? undefined} controls playsInline muted preload="metadata" />
+            ) : (
+              <img src={p.url} alt={p.label} loading="lazy" />
+            )}
+          </div>
+          <footer className="mod-actions">
+            <div className="mod-btns">
+              <button className="btn btn-soft btn-sm" onClick={() => takeDown(p, false)}>
+                Take down
+              </button>
+              <button className="btn btn-danger btn-sm" onClick={() => takeDown(p, true)}>
+                Take down + {p.points} pts
+              </button>
+            </div>
+          </footer>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -350,7 +457,7 @@ function Users({ onUser }: { onUser: (id: string) => void }) {
                     {u.name} <Badges user={u} />
                   </strong>
                   <span>
-                    {u.email} · {u.school}
+                    {u.school} · {amount(u.impact.co2)} kg CO₂ · {fmt(u.impact.water)} L · {fmt(u.impact.plastic)} plastic
                   </span>
                 </div>
                 <span className="board-pts num">{fmt(u.points)}</span>
@@ -365,7 +472,7 @@ function Users({ onUser }: { onUser: (id: string) => void }) {
 
 function UserSheet({ userId, onClose, onChange }: { userId: string | null; onClose: () => void; onChange: () => void }) {
   const [user, setUser] = useState<AdminUserDetail | null>(null)
-  const [amount, setAmount] = useState('')
+  const [takeBack, setTakeBack] = useState('')
   const [reason, setReason] = useState('')
 
   const load = useCallback(() => {
@@ -374,7 +481,7 @@ function UserSheet({ userId, onClose, onChange }: { userId: string | null; onClo
 
   useEffect(() => {
     setUser(null)
-    setAmount('')
+    setTakeBack('')
     setReason('')
     load()
   }, [load])
@@ -394,9 +501,9 @@ function UserSheet({ userId, onClose, onChange }: { userId: string | null; onClo
   }
 
   const take = async () => {
-    const n = Math.floor(Number(amount))
+    const n = Math.floor(Number(takeBack))
     if (await act(() => takePoints(user!.id, n, reason), `Take ${n} points from ${user!.name}?`)) {
-      setAmount('')
+      setTakeBack('')
       setReason('')
     }
   }
@@ -426,11 +533,21 @@ function UserSheet({ userId, onClose, onChange }: { userId: string | null; onClo
           </div>
 
           <section className="mod-section">
+            <p className="label">Impact</p>
+            <div className="card">
+              <ImpactStats impact={user.impact} compact />
+              {user.impact.co2 > 0 && (
+                <p className="analogy-line">🚗 Like not driving {amount(user.impact.co2 * MILES_PER_KG_CO2)} miles</p>
+              )}
+            </div>
+          </section>
+
+          <section className="mod-section">
             <p className="label">Take back points</p>
             <div className="mod-form">
-              <input type="number" inputMode="numeric" min={1} placeholder="Points" value={amount} onChange={(e) => setAmount(e.target.value)} />
+              <input type="number" inputMode="numeric" min={1} placeholder="Points" value={takeBack} onChange={(e) => setTakeBack(e.target.value)} />
               <input placeholder="Reason (optional)" value={reason} maxLength={120} onChange={(e) => setReason(e.target.value)} />
-              <button className="btn btn-primary btn-sm" disabled={!(Number(amount) >= 1)} onClick={take}>
+              <button className="btn btn-primary btn-sm" disabled={!(Number(takeBack) >= 1)} onClick={take}>
                 Take
               </button>
             </div>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Camera, Gift, House, Sparkles, Trophy } from 'lucide-react'
-import { fmt } from './data'
+import { fmt, type Impact } from './data'
 import { go } from './router'
 import { useStore } from './store'
 
@@ -135,6 +135,32 @@ export function TabBar({ active }: { active: string }) {
         ),
       )}
     </nav>
+  )
+}
+
+/** Small amounts keep their decimals so a single snap doesn't read as "0". */
+export const amount = (n: number) => fmt(n, n === 0 || n >= 10 ? 0 : n < 1 ? 2 : 1)
+
+export function ImpactStats({ impact, compact = false }: { impact: Impact; compact?: boolean }) {
+  return (
+    <div className={`impact-grid is-4 ${compact ? 'is-compact' : ''}`}>
+      <div>
+        <strong>{amount(impact.co2)}</strong>
+        <span>kg CO₂</span>
+      </div>
+      <div>
+        <strong>{amount(impact.kwh)}</strong>
+        <span>kWh</span>
+      </div>
+      <div>
+        <strong>{fmt(impact.water)}</strong>
+        <span>L water</span>
+      </div>
+      <div>
+        <strong>{fmt(impact.plastic)}</strong>
+        <span>plastic</span>
+      </div>
+    </div>
   )
 }
 

@@ -4,10 +4,11 @@
  * token and a copy of the last session so the app opens offline.
  */
 import { ANTI_CHEAT } from './config'
-import { OTHER } from './data'
+import { OTHER, dailyLimit } from './data'
 import {
-  DAILY_LIMIT,
   type AdminActivity,
+  type AdminOverview,
+  type AdminPost,
   type AdminSummary,
   type AdminUserDetail,
   type AdminUserRow,
@@ -17,6 +18,7 @@ import {
   type Redemption,
   type Session,
   type Snap,
+  type SnapDetail,
   type StudentRow,
   type SubmitOutcome,
   type UniversityRow,
@@ -24,7 +26,6 @@ import {
 import type { Photo } from './photo'
 
 export type * from './model'
-export { DAILY_LIMIT }
 
 const TOKEN_KEY = 'ecou:token'
 const SESSION_KEY = 'ecou:session'
@@ -78,7 +79,7 @@ const startOfDay = () => new Date().setHours(0, 0, 0, 0)
 export const usedToday = (snaps: Snap[], actionId: string) =>
   snaps.filter((s) => s.actionId === actionId && s.ts >= startOfDay()).length
 
-export const atDailyLimit = (snaps: Snap[], actionId: string) => ANTI_CHEAT && usedToday(snaps, actionId) >= DAILY_LIMIT
+export const atDailyLimit = (snaps: Snap[], actionId: string) => ANTI_CHEAT && usedToday(snaps, actionId) >= dailyLimit(actionId)
 
 /** Falls back to the last copy when offline or the server is down; null once logged out. */
 export async function getSession(): Promise<Session | null> {
@@ -127,6 +128,7 @@ export async function submitSnap(actionId: string, photo: Photo, description?: s
       kind: photo.kind,
       frames: photo.frames,
       thumb: photo.thumb,
+      photo: photo.image,
       hash: photo.hash,
       source: photo.source,
       description: isOther ? description!.trim() : undefined,
@@ -135,6 +137,8 @@ export async function submitSnap(actionId: string, photo: Photo, description?: s
     return { ok: false, kind: 'error', message: (e as Error).message }
   }
 }
+
+export const getSnapDetail = (snapId: string) => call<SnapDetail>(`snap?id=${encodeURIComponent(snapId)}`)
 
 export const getStudentLeaderboard = () => call<StudentRow[]>('leaderboard/students')
 
@@ -188,6 +192,10 @@ export const reportPost = (postId: string, reason: ReportReason) => call('report
 export const getAdminSummary = () => call<AdminSummary>('admin/summary')
 
 export const markAdminSeen = () => call('admin/seen', 'POST')
+
+export const getAdminOverview = () => call<AdminOverview>('admin/overview')
+
+export const getAdminPosts = () => call<AdminPost[]>('admin/posts')
 
 export const getAdminQueue = () => call<FlagItem[]>('admin/queue')
 

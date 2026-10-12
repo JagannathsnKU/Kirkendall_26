@@ -29,7 +29,31 @@ export const CHECKS: Record<string, { claim: string; evidence: string }> = {
     evidence: 'cans, bottles, paper, or cardboard going into or sitting at a recycling bin',
   },
   dry: {
-    claim: 'I air-dried my laundry',
+    claim: 'I air-dried my clothes',
     evidence: 'clothes or laundry hanging to dry on a rack, line, or hangers',
+  },
+  secondhand: {
+    claim: 'I bought something secondhand',
+    evidence: 'a thrift, vintage, or consignment store, a secondhand price tag, or a clearly used item the student just bought',
+  },
+  donate: {
+    claim: 'I donated clothes',
+    evidence: 'a bag or box of clothes at or going into a donation bin or donation center, or a donation receipt',
+  },
+  volunteer: {
+    claim: 'I volunteered in my community',
+    evidence: 'a community cleanup, garden, tree planting, food bank or pantry, or people working together on a volunteer project, e.g. gloves and trash bags',
+  },
+  coldwash: {
+    claim: 'I washed my laundry in cold water',
+    evidence: 'a washing machine dial, button, or display set to cold, or to 30°C / 86°F or lower',
+  },
+  bag: {
+    claim: 'I used a reusable shopping bag',
+    evidence: 'a reusable cloth, canvas, or tote bag used for shopping or carrying groceries (NOT a single-use plastic bag)',
+  },
+  container: {
+    claim: 'I used my own reusable food container',
+    evidence: 'a reusable food container, lunchbox, or jar holding food or being filled at a dining hall or restaurant (NOT a disposable takeout box)',
   },
 }

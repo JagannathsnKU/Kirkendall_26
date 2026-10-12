@@ -1815,39 +1815,124 @@ img {
   color: var(--ink-3);
 }
 
-/* ───────── Admin ───────── */
+/* ───────── Snap detail ───────── */
 
-.top-actions {
+.snap-open {
+  display: block;
+  width: 100%;
+  padding: 0;
+  text-align: left;
+}
+
+.snap-open:active .snap {
+  transform: scale(0.97);
+}
+
+.snap {
+  transition: transform 0.15s;
+}
+
+.snap-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.snap-detail-media {
+  border-radius: 20px;
+  overflow: hidden;
+  background: #000;
+}
+
+.snap-detail-media img,
+.snap-detail-media video {
+  display: block;
+  width: 100%;
+  max-height: 46dvh;
+  object-fit: contain;
+}
+
+.snap-detail-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
-.admin-btn {
-  position: relative;
-  color: var(--deep);
+.snap-detail-emoji {
+  font-size: 30px;
 }
 
-.badge {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
+.snap-detail-head div {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.snap-detail-head strong {
+  font-size: 17px;
+}
+
+.snap-detail-head span {
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.snap-detail-pts {
+  padding: 4px 12px;
   border-radius: 99px;
-  background: var(--ink-3);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 750;
-  line-height: 18px;
-  text-align: center;
-  box-shadow: 0 0 0 2px var(--bg);
+  background: var(--mint-soft);
+  color: var(--deep);
+  font-size: 15px;
 }
 
-.badge.is-new {
-  background: #dc2626;
+.snap-analogy {
+  padding: 18px 16px;
+  text-align: center;
 }
+
+.snap-analogy .analogy-emoji {
+  font-size: 38px;
+  animation: none;
+}
+
+.snap-analogy .analogy-text {
+  font-size: 19px;
+}
+
+.snap-detail-note {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-3);
+  text-align: center;
+}
+
+.impact-grid.is-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.impact-grid.is-4 strong {
+  font-size: 22px;
+}
+
+.impact-grid.is-compact {
+  padding: 14px;
+  border-radius: 18px;
+  background: var(--surface);
+  text-align: center;
+}
+
+.card .impact-grid.is-compact {
+  padding: 0;
+}
+
+.impact-grid.is-compact strong {
+  font-size: 19px;
+}
+
+/* ───────── Admin ───────── */
 
 .segment .count {
   margin-left: 6px;

@@ -1,4 +1,4 @@
-import type { Action, Impact } from '../src/data.ts'
+import { OTHER, OTHER_CAP, pointsFor, type Action, type Impact } from '../src/data.ts'
 import { CHECKS } from './checks.ts'
 import { HttpError } from './http.ts'
 
@@ -18,9 +18,7 @@ export const OTHER_ID = 'other'
 /** ANTI_CHEAT=0 in .env stops rejecting photos of screens or stock images. For local testing only. */
 export const ANTI_CHEAT = process.env.ANTI_CHEAT !== '0'
 const MIN_CONFIDENCE = 0.6
-const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash'
-const POINTS = { min: 5, max: 20 }
-const IMPACT_CAP: Impact = { co2: 2, kwh: 3, water: 100, plastic: 3 }
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite'
 
 const BASE_PROPS = {
   match: { type: 'boolean', description: 'The photo shows the required evidence.' },
@@ -36,7 +34,6 @@ const OTHER_PROPS = {
   sustainable: { type: 'boolean', description: 'The described action genuinely helps the environment.' },
   label: { type: 'string', description: 'Short title for the action, max 4 words, e.g. "Fixed a leaky tap".' },
   emoji: { type: 'string', description: 'One emoji for the action.' },
-  points: { type: 'integer', minimum: POINTS.min, maximum: POINTS.max },
   co2: { type: 'number', description: 'kg of CO₂ saved, rough estimate.' },
   kwh: { type: 'number', description: 'kWh of electricity saved.' },
   water: { type: 'number', description: 'Liters of water saved.' },
@@ -73,10 +70,11 @@ function otherPrompt(description: string) {
     'sustainable: the action genuinely helps the environment. Jokes, harmful, or unrelated actions are not sustainable.',
     ...RULES,
     'If it is not a match or not sustainable, the reason says why.',
-    `Score points from ${POINTS.min} to ${POINTS.max} by real impact. For scale: reusable bottle = 10, recycling = 10, plant-based meal = 20.`,
-    'Estimate the impact of doing it once, using rough public averages: grid electricity 0.4 kg CO₂/kWh, driving 0.25 kg CO₂/km,',
-    'one phone charge 0.008 kg CO₂, microwave 1.1 kW, fridge 1.2 kWh/day, one drink bottle 0.5 L. Use 0 for fields that do not apply.',
-    'Make the analogy something a student instantly pictures, like phone charges, minutes of microwave, km not driven, or days of drinking water.',
+    'Estimate the impact of doing it once, honestly and conservatively, using rough public averages: grid electricity 0.4 kg CO₂/kWh,',
+    'driving 0.4 kg CO₂/mile, one phone charge 0.008 kg CO₂, microwave 1.1 kW, fridge 1.2 kWh/day, one drink bottle 0.5 L.',
+    'For scale: a reusable bottle saves 1 plastic item and 0.08 kg CO₂; a plant-based meal saves 1 kg CO₂; skipping a 3-mile drive saves 1.2 kg CO₂.',
+    'Use 0 for fields that do not apply. Use miles, never kilometers.',
+    'Make the analogy something a student instantly pictures, like phone charges, minutes of microwave, miles not driven, or days of drinking water.',
   ].join('\n')
 }
 
@@ -91,7 +89,8 @@ function mockVerdict(actionId: string, description?: string): Verdict {
     custom: {
       label: text(description, 32, 'Green action'),
       emoji: '🌱',
-      points: 10,
+      points: pointsFor({ co2: 0.1, kwh: 0, water: 0, plastic: 0 }),
+      limit: OTHER.limit,
       impact: { co2: 0.1, kwh: 0, water: 0, plastic: 0 },
       headline: 'You saved ~0.1 kg of CO₂',
       analogy: 'That’s like charging your phone 12 times',
@@ -157,18 +156,20 @@ export async function verifyPhoto(actionId: string, images: string[], descriptio
   const verdict: Verdict = { verified, confidence, reason: text(out.reason, 140, ''), suspicious }
   if (!isOther || !verified) return verdict
 
+  const impact: Impact = {
+    co2: +num(out.co2, OTHER_CAP.co2).toFixed(2),
+    kwh: +num(out.kwh, OTHER_CAP.kwh).toFixed(2),
+    water: Math.round(num(out.water, OTHER_CAP.water)),
+    plastic: Math.round(num(out.plastic, OTHER_CAP.plastic)),
+  }
   return {
     ...verdict,
     custom: {
       label: text(out.label, 32, 'Green action'),
       emoji: text(out.emoji, 8, '🌱'),
-      points: Math.round(Math.max(POINTS.min, Math.min(POINTS.max, Number(out.points) || POINTS.min))),
-      impact: {
-        co2: +num(out.co2, IMPACT_CAP.co2).toFixed(2),
-        kwh: +num(out.kwh, IMPACT_CAP.kwh).toFixed(2),
-        water: Math.round(num(out.water, IMPACT_CAP.water)),
-        plastic: Math.round(num(out.plastic, IMPACT_CAP.plastic)),
-      },
+      points: pointsFor(impact),
+      limit: OTHER.limit,
+      impact,
       headline: text(out.headline, 90, 'Every small action adds up'),
       analogy: text(out.analogy, 80, 'That’s a real step for the planet'),
       analogyEmoji: text(out.analogyEmoji, 8, '🌍'),

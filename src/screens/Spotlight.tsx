@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { ArrowBigDown, ArrowBigUp, Flag, ShieldX, Sparkles, Trash2 } from 'lucide-react'
-import { deletePost, getPosts, reportPost, takeDownPost, votePost } from '../api'
+import { ArrowBigDown, ArrowBigUp, Flag, Sparkles, Trash2 } from 'lucide-react'
+import { deletePost, getPosts, reportPost, votePost } from '../api'
 import { universityById } from '../data'
 import { REPORT_REASONS, SPOTLIGHT_BONUSES, type Post, type ReportReason } from '../model'
 import { useStore } from '../store'
@@ -13,7 +13,6 @@ export default function Spotlight() {
   const [error, setError] = useState<string | null>(null)
   const [reporting, setReporting] = useState<Post | null>(null)
   const uni = universityById(session!.user.universityId)
-  const isAdmin = !!session!.user.admin
 
   useEffect(() => {
     setPosts(null)
@@ -41,16 +40,6 @@ export default function Spotlight() {
     if (!confirm('Remove this from Spotlight?')) return
     try {
       await deletePost(post.id)
-      drop(post.id)
-    } catch (e) {
-      alert((e as Error).message)
-    }
-  }
-
-  const takeDown = async (post: Post) => {
-    if (!confirm(`Take down ${post.name}’s post for everyone?`)) return
-    try {
-      await takeDownPost(post.id)
       drop(post.id)
     } catch (e) {
       alert((e as Error).message)
@@ -105,7 +94,6 @@ export default function Spotlight() {
               onVote={(dir) => vote(p, dir)}
               onRemove={() => remove(p)}
               onReport={() => setReporting(p)}
-              onTakeDown={isAdmin ? () => takeDown(p) : undefined}
             />
           ))}
         </ul>
@@ -133,10 +121,9 @@ interface CardProps {
   onVote: (dir: 1 | -1) => void
   onRemove: () => void
   onReport: () => void
-  onTakeDown?: () => void
 }
 
-function SpotCard({ post: p, onVote, onRemove, onReport, onTakeDown }: CardProps) {
+function SpotCard({ post: p, onVote, onRemove, onReport }: CardProps) {
   const next = SPOTLIGHT_BONUSES.find((b) => p.score < b.votes)
   return (
     <li className="spot">
@@ -148,11 +135,6 @@ function SpotCard({ post: p, onVote, onRemove, onReport, onTakeDown }: CardProps
             {p.emoji} {p.label} · {timeAgo(p.ts)}
           </span>
         </div>
-        {onTakeDown && !p.mine && (
-          <button className="icon-btn sm" onClick={onTakeDown} aria-label="Take down post">
-            <ShieldX size={16} />
-          </button>
-        )}
         {p.mine ? (
           <button className="icon-btn sm" onClick={onRemove} aria-label="Remove from Spotlight">
             <Trash2 size={16} />

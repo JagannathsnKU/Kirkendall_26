@@ -44,9 +44,14 @@ export async function requireUser(sql: Sql, req: IncomingMessage): Promise<strin
 }
 
 /** Admins are the emails listed in ADMIN_EMAILS, comma-separated. */
-export function isAdmin(email: string) {
-  const admins = (process.env.ADMIN_EMAILS ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean)
-  return admins.includes(email.toLowerCase())
+export const adminEmails = () => (process.env.ADMIN_EMAILS ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean)
+
+export const isAdmin = (email: string) => adminEmails().includes(email.toLowerCase())
+
+/** SQL condition that leaves admins out, for leaderboards and totals. */
+export function notAdmin(sql: Sql) {
+  const admins = adminEmails()
+  return admins.length ? sql`email not in ${sql(admins)}` : sql`true`
 }
 
 export async function requireAdmin(sql: Sql, req: IncomingMessage): Promise<string> {

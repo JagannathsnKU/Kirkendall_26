@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronRight, Download, LogOut, Pencil, ShieldCheck } from 'lucide-react'
+import { ChevronRight, Download, LogOut, Pencil } from 'lucide-react'
 import { signOut } from '../api'
 import { fmt, universityById } from '../data'
 import { useInstall } from '../install'
@@ -44,13 +44,6 @@ export default function Me() {
       </div>
 
       <ul className="menu">
-        {user.admin && (
-          <li>
-            <button onClick={() => go('admin')}>
-              <ShieldCheck size={18} /> Admin <ChevronRight size={18} className="chev" />
-            </button>
-          </li>
-        )}
         <li>
           <button onClick={() => go('setup')}>
             <Pencil size={18} /> Edit profile <ChevronRight size={18} className="chev" />

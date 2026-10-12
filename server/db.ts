@@ -117,6 +117,20 @@ const SCHEMA = [
     resolved_at bigint,
     ts bigint not null
   )`,
+  `alter table snaps add column if not exists photo text not null default ''`,
+  `alter table snaps add column if not exists impact text`,
+  `alter table snaps add column if not exists headline text`,
+  `alter table snaps add column if not exists analogy text`,
+  `alter table snaps add column if not exists analogy_emoji text`,
+  `create index if not exists snaps_ts on snaps (ts)`,
+  // Snaps are deleted after a week; their fingerprints stay so old photos can't be reused.
+  `create table if not exists photo_hashes (
+    user_id text not null references users (id) on delete cascade,
+    hash text not null,
+    ts bigint not null,
+    primary key (user_id, hash)
+  )`,
+  `insert into photo_hashes (user_id, hash, ts) select user_id, hash, ts from snaps where hash <> '' on conflict do nothing`,
   `create unique index if not exists flags_open_post on flags (post_id) where status = 'open'`,
   `create unique index if not exists flags_open_user on flags (user_id) where status = 'open' and kind = 'user'`,
   `create index if not exists flags_status_ts on flags (status, ts desc)`,
