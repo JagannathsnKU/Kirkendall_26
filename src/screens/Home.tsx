@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Camera, ChevronRight, Download, X } from 'lucide-react'
+import { Camera, ChevronRight, Download, Play, ShieldCheck, X } from 'lucide-react'
 import { getStudentLeaderboard } from '../api'
 import { KM_PER_KG_CO2, REWARDS, actionById, fmt, universityById } from '../data'
 import { useInstall } from '../install'
@@ -10,7 +10,7 @@ import { Tree } from '../tree'
 import { Avatar, Bar, CountUp, Logo, timeAgo } from '../ui'
 
 export default function Home() {
-  const { session, openCamera } = useStore()
+  const { session, openCamera, alerts } = useStore()
   const { mode, install } = useInstall()
   const [rank, setRank] = useState<number | null>(null)
   const [hideInstall, setHideInstall] = useState(() => localStorage.getItem('ecou:hide-install') === '1')
@@ -35,9 +35,17 @@ export default function Home() {
     <div className="page">
       <header className="top">
         <Logo />
-        <button onClick={() => go('me')} aria-label="Profile">
-          <Avatar name={user.name} size={36} />
-        </button>
+        <div className="top-actions">
+          {user.admin && (
+            <button className="icon-btn admin-btn" onClick={() => go('admin')} aria-label={`Admin, ${alerts?.open ?? 0} to review`}>
+              <ShieldCheck size={20} />
+              {!!alerts?.open && <span className={`badge ${alerts.unread ? 'is-new' : ''}`}>{alerts.open}</span>}
+            </button>
+          )}
+          <button onClick={() => go('me')} aria-label="Profile">
+            <Avatar name={user.name} size={36} />
+          </button>
+        </div>
       </header>
 
       {mode && !hideInstall && (
@@ -107,6 +115,11 @@ export default function Home() {
             {snaps.slice(0, 9).map((s) => (
               <figure key={s.id} className="snap">
                 <img src={s.thumb} alt="" />
+                {s.kind === 'video' && (
+                  <span className="snap-play" aria-label="Video">
+                    <Play size={12} fill="currentColor" />
+                  </span>
+                )}
                 <figcaption>
                   <span>{s.emoji ?? actionById(s.actionId)?.emoji}</span>
                   <span>

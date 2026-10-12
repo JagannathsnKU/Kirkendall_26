@@ -47,6 +47,12 @@ export default function Result() {
         </p>
       )}
 
+      {result.spotlight && (
+        <p className={`result-spotlight r2 ${result.spotlight === 'failed' ? 'is-failed' : ''}`}>
+          {result.spotlight === 'shared' ? `✨ Shared to ${uni.short}’s Spotlight` : 'Couldn’t share to Spotlight, but your points count.'}
+        </p>
+      )}
+
       <section className="analogy r3">
         <span className="analogy-emoji">{action.analogyEmoji}</span>
         <p className="analogy-text">{action.analogy}</p>

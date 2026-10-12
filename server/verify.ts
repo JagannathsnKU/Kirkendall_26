@@ -9,6 +9,8 @@ export interface Verdict {
   verified: boolean
   confidence: number
   reason: string
+  /** The AI thought it was a photo of a screen or a stock image. */
+  suspicious?: boolean
   custom?: CustomAction
 }
 
@@ -98,33 +100,23 @@ function mockVerdict(actionId: string, description?: string): Verdict {
   }
 }
 
-export async function verifyPhoto(actionId: string, imageBase64: string, description?: string): Promise<Verdict> {
-  const isOther = actionId === OTHER_ID
-  if (!CHECKS[actionId] && !isOther) throw new HttpError(400, 'Unknown action')
-  if (isOther && (!description || description.length < 3)) throw new HttpError(400, 'Tell us what you did.')
+const VIDEO_NOTE = 'The images are frames from one short video, in order. Judge the video as a whole, as if it were one photo.'
 
-  if (process.env.VERIFY_MOCK === '1') return mockVerdict(actionId, description)
-
+/** One Gemini call that answers in JSON matching `schema`. `images` are base64 JPEGs. */
+export async function askGemini(images: string[], instructions: string, schema: object, timeoutMs = 20_000) {
   const key = process.env.GEMINI_API_KEY
   if (!key) throw new HttpError(503, 'Photo verification isn’t set up yet.')
 
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-    signal: AbortSignal.timeout(20_000),
+    signal: AbortSignal.timeout(timeoutMs),
     body: JSON.stringify({
-      contents: [
-        {
-          parts: [
-            { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } },
-            { text: isOther ? otherPrompt(description!) : prompt(actionId) },
-          ],
-        },
-      ],
+      contents: [{ parts: [...images.map((data) => ({ inline_data: { mime_type: 'image/jpeg', data } })), { text: instructions }] }],
       generationConfig: {
         temperature: 0,
         responseMimeType: 'application/json',
-        responseJsonSchema: isOther ? OTHER_SCHEMA : SCHEMA,
+        responseJsonSchema: schema,
       },
     }),
   })
@@ -136,21 +128,33 @@ export async function verifyPhoto(actionId: string, imageBase64: string, descrip
 
   const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] }
   const raw: string | undefined = data?.candidates?.[0]?.content?.parts?.[0]?.text
-  let out: Record<string, unknown>
   try {
-    out = JSON.parse(raw ?? '')
+    return JSON.parse(raw ?? '') as Record<string, unknown>
   } catch {
     console.error('Unparseable Gemini response', JSON.stringify(data).slice(0, 500))
     throw new HttpError(502, 'Couldn’t check your photo right now. Try again.')
   }
+}
+
+/** `images` holds one photo, or a few frames from a short video. */
+export async function verifyPhoto(actionId: string, images: string[], description?: string): Promise<Verdict> {
+  const isOther = actionId === OTHER_ID
+  if (!CHECKS[actionId] && !isOther) throw new HttpError(400, 'Unknown action')
+  if (isOther && (!description || description.length < 3)) throw new HttpError(400, 'Tell us what you did.')
+  const instructions = isOther ? otherPrompt(description!) : prompt(actionId)
+
+  if (process.env.VERIFY_MOCK === '1') return mockVerdict(actionId, description)
+
+  const out = await askGemini(
+    images,
+    images.length > 1 ? `${VIDEO_NOTE}\n${instructions}` : instructions,
+    isOther ? OTHER_SCHEMA : SCHEMA,
+  )
 
   const confidence = num(out.confidence, 1)
-  const verified =
-    out.match === true &&
-    (!ANTI_CHEAT || out.suspicious !== true) &&
-    confidence >= MIN_CONFIDENCE &&
-    (!isOther || out.sustainable === true)
-  const verdict: Verdict = { verified, confidence, reason: text(out.reason, 140, '') }
+  const suspicious = ANTI_CHEAT && out.suspicious === true
+  const verified = out.match === true && !suspicious && confidence >= MIN_CONFIDENCE && (!isOther || out.sustainable === true)
+  const verdict: Verdict = { verified, confidence, reason: text(out.reason, 140, ''), suspicious }
   if (!isOther || !verified) return verdict
 
   return {

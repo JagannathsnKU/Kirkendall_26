@@ -10,6 +10,8 @@ import Result from './screens/Result'
 import Board from './screens/Board'
 import Rewards from './screens/Rewards'
 import Me from './screens/Me'
+import Spotlight from './screens/Spotlight'
+import Admin from './screens/Admin'
 
 const PUBLIC = new Set(['welcome', 'setup', 'login'])
 const FULLSCREEN = new Set(['welcome', 'setup', 'login', 'snap', 'result'])
@@ -28,10 +30,14 @@ function Screen({ route }: { route: string }) {
       return <Result />
     case 'board':
       return <Board />
+    case 'spotlight':
+      return <Spotlight />
     case 'rewards':
       return <Rewards />
     case 'me':
       return <Me />
+    case 'admin':
+      return <Admin />
     default:
       return <Home />
   }

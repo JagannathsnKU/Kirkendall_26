@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Camera, Gift, House, Trophy, User } from 'lucide-react'
+import { Camera, Gift, House, Sparkles, Trophy } from 'lucide-react'
 import { fmt } from './data'
 import { go } from './router'
 import { useStore } from './store'
@@ -109,12 +109,13 @@ export function QrArt({ seed, size = 160 }: { seed: string; size?: number }) {
   )
 }
 
+/* Profile ("me") opens from the avatar on Home. */
 const TABS = [
   { path: 'home', label: 'Home', icon: House },
-  { path: 'board', label: 'Ranks', icon: Trophy },
+  { path: 'spotlight', label: 'Spotlight', icon: Sparkles },
   { path: 'snap', label: 'Snap', icon: Camera },
+  { path: 'board', label: 'Ranks', icon: Trophy },
   { path: 'rewards', label: 'Rewards', icon: Gift },
-  { path: 'me', label: 'Me', icon: User },
 ]
 
 export function TabBar({ active }: { active: string }) {

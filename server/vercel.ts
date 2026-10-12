@@ -3,7 +3,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { handle } from './app.ts'
 
 export default function (req: IncomingMessage, res: ServerResponse) {
-  const path = new URL(req.url ?? '/', 'http://localhost').searchParams.get('__path')
-  if (path !== null) req.url = `/api/${path}`
+  const url = new URL(req.url ?? '/', 'http://localhost')
+  const path = url.searchParams.get('__path')
+  if (path !== null) {
+    url.searchParams.delete('__path')
+    req.url = `/api/${path}${url.search}`
+  }
   return handle(req, res)
 }

@@ -5,7 +5,22 @@
  */
 import { ANTI_CHEAT } from './config'
 import { OTHER } from './data'
-import { DAILY_LIMIT, type Redemption, type Session, type Snap, type StudentRow, type SubmitOutcome, type UniversityRow } from './model'
+import {
+  DAILY_LIMIT,
+  type AdminActivity,
+  type AdminSummary,
+  type AdminUserDetail,
+  type AdminUserRow,
+  type FlagItem,
+  type Post,
+  type ReportReason,
+  type Redemption,
+  type Session,
+  type Snap,
+  type StudentRow,
+  type SubmitOutcome,
+  type UniversityRow,
+} from './model'
 import type { Photo } from './photo'
 
 export type * from './model'
@@ -35,6 +50,8 @@ function remember(next: string | null, session: Session | null) {
   else localStorage.removeItem(SESSION_KEY)
 }
 
+const authHeaders = (): Record<string, string> => (token ? { Authorization: `Bearer ${token}` } : {})
+
 async function call<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   let res: Response
   try {
@@ -43,7 +60,7 @@ async function call<T>(path: string, method = 'GET', body?: unknown): Promise<T>
       headers: {
         'Content-Type': 'application/json',
         'X-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...authHeaders(),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
@@ -107,7 +124,8 @@ export async function submitSnap(actionId: string, photo: Photo, description?: s
   try {
     return await call<SubmitOutcome>('snap', 'POST', {
       actionId,
-      image: photo.upload,
+      kind: photo.kind,
+      frames: photo.frames,
       thumb: photo.thumb,
       hash: photo.hash,
       source: photo.source,
@@ -123,3 +141,73 @@ export const getStudentLeaderboard = () => call<StudentRow[]>('leaderboard/stude
 export const getUniversityLeaderboard = () => call<UniversityRow[]>('leaderboard/schools')
 
 export const redeemReward = (rewardId: string) => call<Redemption>('redeem', 'POST', { rewardId })
+
+const VIDEO_EXT: Record<string, string> = { 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm' }
+
+/** Uploads the media straight to storage, then posts it to the user's school Spotlight. */
+export async function sharePost(userId: string, snapId: string, photo: Photo, onProgress?: (pct: number) => void) {
+  const { upload } = await import('@vercel/blob/client')
+  const put = async (name: string, body: Blob, contentType: string, progress?: (pct: number) => void) => {
+    const blob = await upload(`spotlight/${userId}/${name}`, body, {
+      access: 'public',
+      handleUploadUrl: '/api/media',
+      headers: authHeaders(),
+      contentType,
+      onUploadProgress: progress && ((e) => progress(e.percentage)),
+    })
+    return blob.url
+  }
+  const still = await (await fetch(photo.preview)).blob()
+  let url: string
+  let poster: string | null = null
+  if (photo.kind === 'video' && photo.video) {
+    const type = photo.video.type.split(';')[0] || 'video/mp4'
+    const contentType = VIDEO_EXT[type] ? type : 'video/mp4'
+    ;[url, poster] = await Promise.all([
+      put(`${snapId}.${VIDEO_EXT[contentType]}`, photo.video, contentType, onProgress),
+      put(`${snapId}-poster.jpg`, still, 'image/jpeg'),
+    ])
+  } else {
+    url = await put(`${snapId}.jpg`, still, 'image/jpeg', onProgress)
+  }
+  await call('posts', 'POST', { snapId, url, poster })
+}
+
+export const getPosts = (sort: 'top' | 'new') => call<Post[]>(`posts?sort=${sort}`)
+
+/** `hidden` means the vote sent the post to admin review. */
+export const votePost = (postId: string, value: -1 | 0 | 1) =>
+  call<{ score: number; myVote: -1 | 0 | 1; bonus: number; hidden: boolean }>('vote', 'POST', { postId, value })
+
+export const deletePost = (postId: string) => call('posts/delete', 'POST', { postId })
+
+export const reportPost = (postId: string, reason: ReportReason) => call('report', 'POST', { postId, reason })
+
+/* Admin only. */
+
+export const getAdminSummary = () => call<AdminSummary>('admin/summary')
+
+export const markAdminSeen = () => call('admin/seen', 'POST')
+
+export const getAdminQueue = () => call<FlagItem[]>('admin/queue')
+
+export const getAdminActivity = () => call<AdminActivity>('admin/activity')
+
+export const getAdminUsers = (q: string) => call<AdminUserRow[]>(`admin/users?q=${encodeURIComponent(q)}`)
+
+export const getAdminUser = (id: string) => call<AdminUserDetail>(`admin/user?id=${encodeURIComponent(id)}`)
+
+export const decideFlag = (flagId: string, decision: 'keep' | 'remove' | 'dismiss', revoke = false) =>
+  call('admin/decide', 'POST', { flagId, decision, revoke })
+
+export const reviewFlag = (flagId: string) => call('admin/review', 'POST', { flagId })
+
+export const takePoints = (userId: string, amount: number, reason: string) => call('admin/points', 'POST', { userId, amount, reason })
+
+export const revokeSnap = (snapId: string) => call('admin/revoke', 'POST', { snapId })
+
+export const takeDownPost = (postId: string, revoke = false) => call('admin/takedown', 'POST', { postId, revoke })
+
+export const flagUser = (userId: string, note: string) => call('admin/flag', 'POST', { userId, note })
+
+export const setSuspended = (userId: string, banned: boolean) => call('admin/ban', 'POST', { userId, banned })

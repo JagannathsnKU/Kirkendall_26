@@ -34,9 +34,26 @@ const bearer = (req: IncomingMessage) => /^Bearer (\S+)$/.exec(req.headers.autho
 
 export async function requireUser(sql: Sql, req: IncomingMessage): Promise<string> {
   const token = bearer(req)
-  const [row] = token ? await sql<{ user_id: string }[]>`select user_id from sessions where token = ${hashToken(token)}` : []
+  const [row] = token
+    ? await sql<{ user_id: string }[]>`
+        select s.user_id from sessions s join users u on u.id = s.user_id
+        where s.token = ${hashToken(token)} and not u.banned`
+    : []
   if (!row) throw new HttpError(401, 'Please log in again.')
   return row.user_id
+}
+
+/** Admins are the emails listed in ADMIN_EMAILS, comma-separated. */
+export function isAdmin(email: string) {
+  const admins = (process.env.ADMIN_EMAILS ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean)
+  return admins.includes(email.toLowerCase())
+}
+
+export async function requireAdmin(sql: Sql, req: IncomingMessage): Promise<string> {
+  const userId = await requireUser(sql, req)
+  const [user] = await sql<{ email: string }[]>`select email from users where id = ${userId}`
+  if (!user || !isAdmin(user.email)) throw new HttpError(403, 'Admins only.')
+  return userId
 }
 
 export async function endSession(sql: Sql, req: IncomingMessage) {

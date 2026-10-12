@@ -16,7 +16,7 @@ await build({
   input: 'server/vercel.ts',
   platform: 'node',
   logLevel: 'warn',
-  output: { file: `${FUNCTION}/index.mjs`, format: 'esm' },
+  output: { file: `${FUNCTION}/index.mjs`, format: 'esm', codeSplitting: false },
 })
 
 const json = (value: unknown) => JSON.stringify(value, null, 2)

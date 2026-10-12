@@ -1,4 +1,4 @@
-const CACHE = 'ecou-v2'
+const CACHE = 'ecou-v3'
 const SHELL = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon.svg']
 
 self.addEventListener('install', (e) => {
@@ -11,6 +11,18 @@ self.addEventListener('activate', (e) => {
     caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))),
   )
   self.clients.claim()
+})
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close()
+  const url = e.notification.data?.url || '/'
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((wins) => {
+      const win = wins[0]
+      if (!win) return self.clients.openWindow(url)
+      return win.focus().then((w) => w.navigate(url))
+    }),
+  )
 })
 
 self.addEventListener('fetch', (e) => {

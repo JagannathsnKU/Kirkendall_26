@@ -108,3 +108,30 @@ export async function checkUpload(file: File): Promise<string | null> {
   if (age > MAX_AGE_MS) return 'Only photos taken in the last 24 hours count.'
   return null
 }
+
+/** Reads the recording time from the "mvhd" box that MP4 and MOV files carry, near the start or the end. */
+async function videoDate(file: File): Promise<Date | null> {
+  const span = 4 * 1024 * 1024
+  const parts = file.size > span ? [file.slice(0, span), file.slice(file.size - span)] : [file]
+  for (const part of parts) {
+    const bytes = new Uint8Array(await part.arrayBuffer())
+    for (let i = 4; i < bytes.length - 16; i++) {
+      if (bytes[i] !== 0x6d || bytes[i + 1] !== 0x76 || bytes[i + 2] !== 0x68 || bytes[i + 3] !== 0x64) continue
+      const view = new DataView(bytes.buffer, bytes.byteOffset + i + 4)
+      const seconds = view.getUint8(0) === 1 ? Number(view.getBigUint64(4)) : view.getUint32(4)
+      // MP4 times count from 1904-01-01 UTC.
+      return seconds ? new Date((seconds - 2_082_844_800) * 1000) : null
+    }
+  }
+  return null
+}
+
+/** Same freshness rule as photos: recorded in the last 24 hours. */
+export async function checkVideo(file: File): Promise<string | null> {
+  const taken = await videoDate(file)
+  if (!taken) return 'We can’t tell when this video was taken. Record it in the app instead.'
+  const age = Date.now() - taken.getTime()
+  if (age < -CLOCK_SKEW_MS) return 'This video’s date looks off. Record it in the app instead.'
+  if (age > MAX_AGE_MS) return 'Only videos recorded in the last 24 hours count.'
+  return null
+}

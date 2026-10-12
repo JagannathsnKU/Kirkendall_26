@@ -9,6 +9,8 @@ const client = url
   : null
 
 export type Sql = NonNullable<typeof client>
+/** Either the pool or a transaction. */
+export type Query = postgres.ISql
 export const dbConfigured = !!client
 
 const SCHEMA = [
@@ -45,6 +47,28 @@ const SCHEMA = [
     hash text not null default ''
   )`,
   `create index if not exists snaps_user_ts on snaps (user_id, ts desc)`,
+  `alter table snaps add column if not exists kind text not null default 'photo'`,
+  `create table if not exists posts (
+    id text primary key,
+    snap_id text not null unique references snaps (id) on delete cascade,
+    user_id text not null references users (id) on delete cascade,
+    university_id text not null,
+    kind text not null,
+    url text not null,
+    poster text,
+    label text not null,
+    emoji text not null,
+    score integer not null default 0,
+    bonus integer not null default 0,
+    ts bigint not null
+  )`,
+  `create index if not exists posts_school_ts on posts (university_id, ts desc)`,
+  `create table if not exists votes (
+    post_id text not null references posts (id) on delete cascade,
+    user_id text not null references users (id) on delete cascade,
+    value smallint not null,
+    primary key (post_id, user_id)
+  )`,
   `create table if not exists redemptions (
     user_id text not null references users (id) on delete cascade,
     reward_id text not null,
@@ -57,6 +81,45 @@ const SCHEMA = [
     ts bigint not null
   )`,
   `create index if not exists attempts_user_ts on attempts (user_id, ts)`,
+  `alter table users add column if not exists banned boolean not null default false`,
+  `alter table users add column if not exists admin_seen_at bigint not null default 0`,
+  `alter table posts add column if not exists hidden boolean not null default false`,
+  `alter table posts add column if not exists reviewed boolean not null default false`,
+  `create table if not exists reports (
+    post_id text not null references posts (id) on delete cascade,
+    user_id text not null references users (id) on delete cascade,
+    reason text not null,
+    ts bigint not null,
+    primary key (post_id, user_id)
+  )`,
+  `create table if not exists events (
+    id bigint generated always as identity primary key,
+    user_id text not null references users (id) on delete cascade,
+    actor_id text references users (id) on delete set null,
+    kind text not null,
+    detail text not null default '',
+    ts bigint not null
+  )`,
+  `create index if not exists events_ts on events (ts desc)`,
+  `create index if not exists events_user_ts on events (user_id, ts desc)`,
+  `create table if not exists flags (
+    id text primary key,
+    kind text not null,
+    user_id text not null references users (id) on delete cascade,
+    post_id text references posts (id) on delete cascade,
+    reason text not null,
+    note text not null default '',
+    ai_verdict text,
+    ai_reason text,
+    status text not null default 'open',
+    decision text,
+    resolved_by text,
+    resolved_at bigint,
+    ts bigint not null
+  )`,
+  `create unique index if not exists flags_open_post on flags (post_id) where status = 'open'`,
+  `create unique index if not exists flags_open_user on flags (user_id) where status = 'open' and kind = 'user'`,
+  `create index if not exists flags_status_ts on flags (status, ts desc)`,
 ]
 
 let ready: Promise<Sql> | null = null
