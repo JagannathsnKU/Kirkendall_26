@@ -35,6 +35,9 @@ const DUPLICATE_DISTANCE = 6
 /** The AI compares each new photo with this many of the student's latest snaps from this window. */
 const COMPARE_LAST = 3
 const COMPARE_WINDOW_MS = 24 * 60 * 60 * 1000
+/** For "Other", the AI also checks the new claim against this many of the student's Other snaps from this window. */
+const OTHER_HISTORY = 4
+const OTHER_HISTORY_MS = 7 * 24 * 60 * 60 * 1000
 const RECENT_HASHES = 500
 const RECENT_SNAPS = 20
 const MAX_FRAMES = 6
@@ -372,23 +375,39 @@ async function snap(req: IncomingMessage): Promise<SubmitOutcome> {
     }
   }
 
-  const earlier = ANTI_CHEAT
-    ? (
-        await sql<{ photo: string; thumb: string }[]>`
-          select photo, thumb from snaps where user_id = ${userId} and ts > ${Date.now() - COMPARE_WINDOW_MS}
-          order by ts desc limit ${COMPARE_LAST}`
-      )
-        .map((s) => (s.photo || s.thumb).replace(/^data:image\/jpeg;base64,/, ''))
-        .filter(Boolean)
+  type Earlier = { id: string; photo: string; thumb: string; label: string }
+  const recent = ANTI_CHEAT
+    ? await sql<Earlier[]>`
+        select id, photo, thumb, label from snaps where user_id = ${userId} and ts > ${Date.now() - COMPARE_WINDOW_MS}
+        order by ts desc limit ${COMPARE_LAST}`
     : []
+  // "Other" has no cooldown, so the AI also sees the student's recent Other snaps to catch the same claim resubmitted.
+  const pastOther =
+    ANTI_CHEAT && actionId === OTHER_ID
+      ? await sql<Earlier[]>`
+          select id, photo, thumb, label from snaps where user_id = ${userId} and action_id = ${OTHER_ID}
+            and ts > ${Date.now() - OTHER_HISTORY_MS}
+          order by ts desc limit ${OTHER_HISTORY}`
+      : []
+  const earlier = [...recent, ...pastOther.filter((p) => !recent.some((r) => r.id === p.id))]
+    .map((s) => (s.photo || s.thumb).replace(/^data:image\/jpeg;base64,/, ''))
+    .filter(Boolean)
 
-  const verdict = await verifyPhoto(actionId, frames, description, earlier)
+  const verdict = await verifyPhoto(actionId, frames, description, earlier, pastOther.map((p) => p.label))
   const what = description ? `${actionId} "${description}"` : actionId
   const outcome = verdict.verified ? 'ok' : verdict.duplicate ? 'duplicate' : 'rejected'
   console.log(`[verify] ${what} (${kind}, ${source}) → ${outcome} (${verdict.confidence.toFixed(2)})`)
   if (verdict.duplicate) {
-    await logSuspicious(sql, userId, 'duplicate', `${preset?.label ?? description ?? actionId}: same scene as a recent snap`, verdict.ai)
-    return { ok: false, kind: 'duplicate', message: 'This looks like the same scene as a recent snap. Snap a new action!' }
+    const claim = preset?.label ?? description ?? actionId
+    const repeat = verdict.repeat
+    await logSuspicious(sql, userId, 'duplicate', `${claim}: ${repeat ? 'same action as one already logged' : 'same scene as a recent snap'}`, verdict.ai)
+    return {
+      ok: false,
+      kind: 'duplicate',
+      message: repeat
+        ? 'You already logged this one. Snap a different action!'
+        : 'This looks like the same scene as a recent snap. Snap a new action!',
+    }
   }
   if (!verdict.verified) {
     const claim = preset?.label ?? description ?? actionId
