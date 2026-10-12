@@ -1,10 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { getStudentLeaderboard, getUniversityLeaderboard, type StudentRow, type UniversityRow } from '../api'
 import { fmt, universityById } from '../data'
 import { useStore } from '../store'
-import { Avatar } from '../ui'
-
-const MEDALS = ['🥇', '🥈', '🥉']
+import AnimatedList from '../AnimatedList'
 
 export default function Board() {
   const { session } = useStore()
@@ -20,7 +18,21 @@ export default function Board() {
     getUniversityLeaderboard().then(setSchools, () => setOffline(true))
   }, [session])
 
-  const rows = (tab === 'school' ? students : schools).map((s) => ({ key: s.id, name: s.name, points: s.points, me: s.me }))
+  const rows = useMemo(
+    () =>
+      (tab === 'school' ? students : schools).map((s, i) => ({
+        id: s.id,
+        icon: <span className={`board-rank ${i < 3 ? `is-${i + 1}` : ''}`}>{i + 1}</span>,
+        title: s.name,
+        description: s.me ? (tab === 'school' ? 'You' : 'Your school') : undefined,
+        meta: (
+          <span className={`board-pts num ${s.me ? 'board-me' : ''}`}>
+            {fmt(s.points)} <small>pts</small>
+          </span>
+        ),
+      })),
+    [tab, students, schools],
+  )
 
   return (
     <div className="page">
@@ -37,19 +49,19 @@ export default function Board() {
 
       {offline && !rows.length && <p className="empty">Connect to the internet to see the leaderboard.</p>}
 
-      <ol className="board" key={tab}>
-        {rows.map((r, i) => (
-          <li key={r.key} className={r.me ? 'is-me' : ''} style={{ animationDelay: `${Math.min(i, 12) * 25}ms` }}>
-            <span className="board-pos">{MEDALS[i] ?? i + 1}</span>
-            {tab === 'school' && <Avatar name={r.name} size={32} />}
-            <span className="board-name">
-              {r.name}
-              {r.me && tab === 'school' && <em>You</em>}
-            </span>
-            <span className="board-pts num">{fmt(r.points)}</span>
-          </li>
-        ))}
-      </ol>
+      {rows.length > 0 && (
+        <AnimatedList
+          key={tab}
+          items={rows}
+          theme="eco"
+          animation="pop"
+          stagger={0.03}
+          selectOnHover={false}
+          width="100%"
+          maxHeight="calc(100dvh - 250px - var(--safe-top) - var(--safe-bottom))"
+          className="board"
+        />
+      )}
     </div>
   )
 }

@@ -22,7 +22,7 @@ export async function checkPassword(password: string, stored: string | null) {
 }
 
 /** Only a hash of the token is stored, so a leaked database can't be used to sign in. */
-const hashToken = (token: string) => createHash('sha256').update(token).digest('hex')
+export const hashToken = (token: string) => createHash('sha256').update(token).digest('hex')
 
 export async function startSession(sql: Sql, userId: string) {
   const token = randomBytes(32).toString('base64url')

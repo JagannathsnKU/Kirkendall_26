@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import {
   REWARDS,
@@ -7,17 +7,23 @@ import {
   SNAP_TTL_DAYS,
   UNIVERSITIES,
   actionById,
+  cooldownMinutes,
   dailyLimit,
+  pointsFor,
   universityById,
+  waitText,
   type Action,
   type Impact,
 } from '../src/data.ts'
-import type { Session, SnapDetail, SnapResult, StudentRow, SubmitOutcome, UniversityRow, User } from '../src/model.ts'
+import { pickFact } from '../src/facts.ts'
+import { avatarUrl, type Session, type SnapDetail, type SnapResult, type StudentRow, type SubmitOutcome, type UniversityRow, type User } from '../src/model.ts'
+import { TRIP, checkTrip, milesText, summarize, tripHeadline, tripImpact, type TripMode, type TripPoint, type TripSummary } from '../src/route.ts'
 import { emptyStreak, recordDay } from '../src/streak.ts'
 import * as admin from './admin.ts'
-import { checkPassword, endSession, hashPassword, isAdmin, notAdmin, requireUser, startSession } from './auth.ts'
-import { db, dbConfigured, type Sql } from './db.ts'
+import { checkPassword, endSession, hashPassword, hashToken, isAdmin, notAdmin, requireUser, startSession } from './auth.ts'
+import { db, dbConfigured, type Query, type Sql } from './db.ts'
 import { HttpError, readJson, send, str } from './http.ts'
+import { appUrl, requireMail, sendMail } from './mail.ts'
 import { logEvent, logSuspicious, removeMedia } from './moderation.ts'
 import { createPost, deletePost, listPosts, mediaToken, report, vote } from './spotlight.ts'
 import { ANTI_CHEAT, OTHER_ID, verifyPhoto } from './verify.ts'
@@ -26,6 +32,9 @@ const RATE_LIMIT = 20
 /** Someone hammering the rate limit is logged once per this window, not on every blocked request. */
 const RATE_LIMIT_LOG_MS = 10 * 60 * 1000
 const DUPLICATE_DISTANCE = 6
+/** The AI compares each new photo with this many of the student's latest snaps from this window. */
+const COMPARE_LAST = 3
+const COMPARE_WINDOW_MS = 24 * 60 * 60 * 1000
 const RECENT_HASHES = 500
 const RECENT_SNAPS = 20
 const MAX_FRAMES = 6
@@ -33,6 +42,11 @@ const MAX_PHOTO_CHARS = 160_000
 const SNAP_TTL_MS = SNAP_TTL_DAYS * 24 * 60 * 60 * 1000
 const CLEANUP_EVERY_MS = 10 * 60 * 1000
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const RESET_TTL_MS = 60 * 60 * 1000
+/** Reset emails one account can trigger per hour, so the form can't be used to spam someone. */
+const RESETS_PER_HOUR = 3
+const MAX_AVATAR_CHARS = 120_000
+const JPEG = /^data:image\/jpeg;base64,\/9j\/[A-Za-z0-9+/]+=*$/
 
 interface UserRow {
   id: string
@@ -45,8 +59,8 @@ interface UserRow {
   water: number
   plastic: number
   streak: string
+  avatar_at: string
 }
-
 const toUser = (r: UserRow): User => ({
   id: r.id,
   name: r.name,
@@ -55,6 +69,7 @@ const toUser = (r: UserRow): User => ({
   points: r.points,
   impact: { co2: r.co2, kwh: r.kwh, water: r.water, plastic: r.plastic },
   streak: JSON.parse(r.streak),
+  avatar: avatarUrl(r.id, r.avatar_at),
   admin: isAdmin(r.email),
 })
 
@@ -177,6 +192,65 @@ async function login(req: IncomingMessage) {
   return { token: await startSession(sql, row.id), session: await loadSession(sql, row.id) }
 }
 
+/** Always answers the same way, so the form can't be used to find out who has an account. */
+async function forgotPassword(req: IncomingMessage) {
+  const email = str((await readJson(req)).email, 254).toLowerCase()
+  if (!EMAIL.test(email)) throw new HttpError(400, 'Enter a valid email.')
+  requireMail()
+  const base = appUrl(req)
+  const sql = await db()
+  const [user] = await sql<{ id: string; name: string; banned: boolean }[]>`select id, name, banned from users where email = ${email}`
+  if (!user || user.banned) return { ok: true }
+
+  const now = Date.now()
+  await sql`delete from password_resets where expires < ${now}`
+  const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from password_resets where user_id = ${user.id} and ts > ${now - RESET_TTL_MS}`
+  if (n >= RESETS_PER_HOUR) return { ok: true }
+
+  const token = randomBytes(32).toString('base64url')
+  await sql`insert into password_resets (token, user_id, expires, ts) values (${hashToken(token)}, ${user.id}, ${now + RESET_TTL_MS}, ${now})`
+  const link = `${base}/#/reset?token=${token}`
+  const text = `Hi ${user.name},\n\nTap this link to choose a new EcoU password. It works once and expires in an hour.\n\n${link}\n\nIf you didn't ask for this, ignore this email and your password stays the same.`
+  const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:440px;margin:0 auto;padding:24px;color:#0c0d0c">
+  <p style="font-size:20px;font-weight:700;margin:0 0 16px">Reset your EcoU password</p>
+  <p style="font-size:15px;line-height:1.5;margin:0 0 20px">Hi ${escapeHtml(user.name)}, tap the button to choose a new password. The link works once and expires in an hour.</p>
+  <a href="${link}" style="display:inline-block;padding:14px 22px;border-radius:14px;background:#0c0d0c;color:#fff;font-weight:600;text-decoration:none">Choose a new password</a>
+  <p style="font-size:13px;line-height:1.5;color:#525855;margin:20px 0 0">If you didn’t ask for this, ignore this email and your password stays the same.</p>
+</div>`
+  try {
+    await sendMail(email, 'Reset your EcoU password', text, html)
+  } catch (e) {
+    console.error('Reset email failed', e)
+    throw new HttpError(502, 'Couldn’t send the email right now. Try again in a minute.')
+  }
+  return { ok: true }
+}
+
+const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
+
+/** Sets the new password, signs out every other device, and logs this one in. */
+async function resetPassword(req: IncomingMessage) {
+  const body = await readJson(req)
+  const token = str(body.token, 100)
+  const password = typeof body.password === 'string' ? body.password : ''
+  if (password.length < 8 || password.length > 200) throw new HttpError(400, 'Use at least 8 characters for your password.')
+  const hashed = await hashPassword(password)
+  const sql = await db()
+  const userId = await sql.begin(async (tx) => {
+    const [row] = await tx<{ user_id: string; expires: string }[]>`
+      delete from password_resets where token = ${hashToken(token)} returning user_id, expires`
+    if (!row || Number(row.expires) < Date.now()) return null
+    await tx`update users set password = ${hashed} where id = ${row.user_id}`
+    await tx`delete from sessions where user_id = ${row.user_id}`
+    await tx`delete from password_resets where user_id = ${row.user_id}`
+    return row.user_id
+  })
+  if (!userId) throw new HttpError(400, 'This reset link has expired or was already used. Request a new one.')
+  const [user] = await sql<{ banned: boolean }[]>`select banned from users where id = ${userId}`
+  if (user.banned) throw new HttpError(403, 'This account is suspended.')
+  return { token: await startSession(sql, userId), session: await loadSession(sql, userId) }
+}
+
 async function logout(req: IncomingMessage) {
   await endSession(await db(), req)
   return { ok: true }
@@ -193,6 +267,31 @@ async function updateMe(req: IncomingMessage) {
   const { name, universityId } = profile(await readJson(req))
   await sql`update users set name = ${name}, university_id = ${universityId} where id = ${userId}`
   return loadSession(sql, userId)
+}
+
+/** A square JPEG the phone already shrank, or '' to remove the picture. */
+async function updateAvatar(req: IncomingMessage) {
+  const sql = await db()
+  const userId = await requireUser(sql, req)
+  const image = (await readJson(req)).image
+  if (image !== '' && (typeof image !== 'string' || image.length > MAX_AVATAR_CHARS || !JPEG.test(image))) {
+    throw new HttpError(400, 'That picture didn’t work. Try another one.')
+  }
+  await sql`update users set avatar = ${image}, avatar_at = ${image ? Date.now() : 0} where id = ${userId}`
+  return loadSession(sql, userId)
+}
+
+/** Served as an image so <img> tags can load it without a login token. */
+async function serveAvatar(req: IncomingMessage, res: ServerResponse) {
+  const id = str(new URL(req.url ?? '/', 'http://localhost').searchParams.get('u'), 64)
+  const [row] = id ? await (await db())<{ avatar: string }[]>`select avatar from users where id = ${id} and not banned` : []
+  if (!row?.avatar) return res.writeHead(404, { 'Cache-Control': 'no-store' }).end()
+  res.writeHead(200, {
+    'Content-Type': 'image/jpeg',
+    'Cache-Control': 'public, max-age=31536000, immutable',
+    'X-Content-Type-Options': 'nosniff',
+  })
+  res.end(Buffer.from(row.avatar.slice(row.avatar.indexOf(',') + 1), 'base64'))
 }
 
 async function snap(req: IncomingMessage): Promise<SubmitOutcome> {
@@ -213,15 +312,23 @@ async function snap(req: IncomingMessage): Promise<SubmitOutcome> {
   const preset = actionById(actionId)
   if (!preset && actionId !== OTHER_ID) throw new HttpError(400, 'Unknown action.')
   if (!frames.length || !thumb) throw new HttpError(400, 'Missing photo.')
+  const trip = tripFrom(body.trip, actionId)
   const [{ email }] = await sql<{ email: string }[]>`select email from users where id = ${userId}`
   if (isAdmin(email)) throw new HttpError(403, 'Admin accounts don’t log snaps.')
 
   const day = today(req)
   const limit = dailyLimit(actionId)
-  const limitHit: SubmitOutcome = {
-    ok: false,
-    kind: 'limit',
-    message: `This counts ${limit === 1 ? 'once' : `${limit} times`} a day. Come back tomorrow!`,
+  const cooldownMs = cooldownMinutes(actionId) * 60_000
+  /** The daily limit or cooldown that stops this snap from counting, if any. */
+  const blocked = async (q: Query): Promise<SubmitOutcome | null> => {
+    const [u] = await q<{ n: number; last: string | null }[]>`
+      select count(*) filter (where day = ${day})::int as n, max(ts) as last
+      from snaps where user_id = ${userId} and action_id = ${actionId}`
+    if (u.n >= limit) {
+      return { ok: false, kind: 'limit', message: `This counts ${limit === 1 ? 'once' : `${limit} times`} a day. Come back tomorrow!` }
+    }
+    const wait = u.last === null ? 0 : Number(u.last) + cooldownMs - Date.now()
+    return wait > 0 ? { ok: false, kind: 'limit', message: `You just logged this. It counts again in ${waitText(wait)}.` } : null
   }
 
   if (ANTI_CHEAT) {
@@ -236,9 +343,8 @@ async function snap(req: IncomingMessage): Promise<SubmitOutcome> {
     }
     await sql`insert into attempts (user_id, ts) values (${userId}, ${now})`
 
-    const [used] = await sql<{ n: number }[]>`
-      select count(*)::int as n from snaps where user_id = ${userId} and action_id = ${actionId} and day = ${day}`
-    if (used.n >= limit) return limitHit
+    const block = await blocked(sql)
+    if (block) return block
     if (hash) {
       const seen = await sql<{ hash: string }[]>`
         select hash from photo_hashes where user_id = ${userId} order by ts desc limit ${RECENT_HASHES}`
@@ -249,9 +355,41 @@ async function snap(req: IncomingMessage): Promise<SubmitOutcome> {
     }
   }
 
-  const verdict = await verifyPhoto(actionId, frames, description)
+  if (trip) {
+    const claim = `${preset!.label}, ${milesText(trip.summary.miles)} in ${Math.round(trip.summary.minutes)} min`
+    const problem = checkTrip(trip.mode, trip.summary)
+    if (problem) {
+      const detail = `${claim} (${trip.summary.fastMph} mph): ${problem.reason}`
+      if (problem.suspicious) await logSuspicious(sql, userId, 'trip', detail)
+      else await logEvent(sql, userId, 'rejected', detail)
+      return { ok: false, kind: 'rejected', message: problem.reason }
+    }
+    const [overlap] = await sql`
+      select 1 from snaps where user_id = ${userId} and trip_end > ${trip.summary.start} and trip_start < ${trip.summary.end} limit 1`
+    if (overlap) {
+      await logSuspicious(sql, userId, 'duplicate', `${claim}: overlaps a trip already logged`)
+      return { ok: false, kind: 'duplicate', message: 'You already logged this trip.' }
+    }
+  }
+
+  const earlier = ANTI_CHEAT
+    ? (
+        await sql<{ photo: string; thumb: string }[]>`
+          select photo, thumb from snaps where user_id = ${userId} and ts > ${Date.now() - COMPARE_WINDOW_MS}
+          order by ts desc limit ${COMPARE_LAST}`
+      )
+        .map((s) => (s.photo || s.thumb).replace(/^data:image\/jpeg;base64,/, ''))
+        .filter(Boolean)
+    : []
+
+  const verdict = await verifyPhoto(actionId, frames, description, earlier)
   const what = description ? `${actionId} "${description}"` : actionId
-  console.log(`[verify] ${what} (${kind}, ${source}) → ${verdict.verified ? 'ok' : 'rejected'} (${verdict.confidence.toFixed(2)})`)
+  const outcome = verdict.verified ? 'ok' : verdict.duplicate ? 'duplicate' : 'rejected'
+  console.log(`[verify] ${what} (${kind}, ${source}) → ${outcome} (${verdict.confidence.toFixed(2)})`)
+  if (verdict.duplicate) {
+    await logSuspicious(sql, userId, 'duplicate', `${preset?.label ?? description ?? actionId}: same scene as a recent snap`)
+    return { ok: false, kind: 'duplicate', message: 'This looks like the same scene as a recent snap. Snap a new action!' }
+  }
   if (!verdict.verified) {
     const claim = preset?.label ?? description ?? actionId
     if (verdict.suspicious) await logSuspicious(sql, userId, 'screen', `${claim}: ${verdict.reason}`)
@@ -259,16 +397,21 @@ async function snap(req: IncomingMessage): Promise<SubmitOutcome> {
     return { ok: false, kind: 'rejected', message: verdict.reason || 'We couldn’t see that action in this photo.' }
   }
 
-  const action: Action | null = preset ?? (verdict.custom ? { id: OTHER_ID, ...verdict.custom } : null)
+  let action: Action | null = preset ?? (verdict.custom ? { id: OTHER_ID, ...verdict.custom } : null)
   if (!action) throw new HttpError(502, 'Couldn’t check your photo right now. Try again.')
+  if (trip) {
+    const impact = tripImpact(trip.mode, trip.summary.miles)
+    action = { ...action, impact, points: pointsFor(impact), headline: tripHeadline(trip.mode, trip.summary) }
+  }
+  const fact = pickFact(action.impact)
+  const tripCard = trip && { miles: trip.summary.miles, minutes: trip.summary.minutes, avgMph: trip.summary.avgMph }
 
   const award = await sql.begin(async (tx) => {
     const [u] = await tx<UserRow[]>`select * from users where id = ${userId} for update`
     if (ANTI_CHEAT) {
       // Checked again under the row lock so two photos sent at once can't both get past the limit.
-      const [used] = await tx<{ n: number }[]>`
-        select count(*)::int as n from snaps where user_id = ${userId} and action_id = ${actionId} and day = ${day}`
-      if (used.n >= limit) return null
+      const block = await blocked(tx)
+      if (block) return { block }
     }
     const streak = JSON.parse(u.streak)
     const update = recordDay(streak, day)
@@ -285,9 +428,11 @@ async function snap(req: IncomingMessage): Promise<SubmitOutcome> {
     const snapId = randomUUID()
     const now = Date.now()
     await tx`
-      insert into snaps (id, user_id, action_id, label, emoji, kind, points, day, ts, thumb, hash, photo, impact, headline, analogy, analogy_emoji)
+      insert into snaps (id, user_id, action_id, label, emoji, kind, points, day, ts, thumb, hash, photo, impact, headline, analogy, analogy_emoji,
+        trip_start, trip_end, trip)
       values (${snapId}, ${userId}, ${action.id}, ${action.label}, ${action.emoji}, ${kind}, ${action.points}, ${day}, ${now}, ${thumb}, ${hash},
-        ${photo}, ${JSON.stringify(action.impact)}, ${action.headline}, ${action.analogy}, ${action.analogyEmoji})`
+        ${photo}, ${JSON.stringify(action.impact)}, ${action.headline}, ${fact.text}, ${fact.emoji},
+        ${trip?.summary.start ?? null}, ${trip?.summary.end ?? null}, ${tripCard ? JSON.stringify(tripCard) : null})`
     if (hash) {
       await tx`
         insert into photo_hashes (user_id, hash, ts) values (${userId}, ${hash}, ${now})
@@ -295,11 +440,12 @@ async function snap(req: IncomingMessage): Promise<SubmitOutcome> {
     }
     return { snapId, before: u.points, total, streak: update, universityId: u.university_id }
   })
-  if (!award) return limitHit
+  if (award.block) return award.block
 
   const result: SnapResult = {
     snapId: award.snapId,
     action,
+    fact,
     thumb,
     points: action.points,
     total: award.total,
@@ -311,24 +457,41 @@ async function snap(req: IncomingMessage): Promise<SubmitOutcome> {
   return { ok: true, result }
 }
 
+/** A GPS trip sent with a walk or transit snap, or null if there isn't one. */
+function tripFrom(raw: unknown, actionId: string): { mode: TripMode; summary: TripSummary } | null {
+  if (raw == null) return null
+  const t = raw as { mode?: unknown; points?: unknown }
+  if ((t.mode !== 'walk' && t.mode !== 'bus') || t.mode !== actionId) throw new HttpError(400, 'This trip doesn’t match the action.')
+  if (!Array.isArray(t.points)) throw new HttpError(400, 'Invalid trip.')
+  const points = t.points.slice(0, TRIP.MAX_POINTS).filter(
+    (p): p is TripPoint =>
+      Array.isArray(p) && p.length === 4 && p.every((n) => typeof n === 'number' && Number.isFinite(n)) &&
+      Math.abs(p[0]) <= 90 && Math.abs(p[1]) <= 180 && p[3] >= 0,
+  )
+  return { mode: t.mode, summary: summarize(points) }
+}
+
 async function snapDetail(req: IncomingMessage): Promise<SnapDetail> {
   const sql = await db()
   const userId = await requireUser(sql, req)
   const id = str(new URL(req.url ?? '/', 'http://localhost').searchParams.get('id'), 64)
   const [s] = await sql`
-    select s.action_id, s.photo, s.impact, s.headline, s.analogy, s.analogy_emoji,
+    select s.action_id, s.photo, s.impact, s.headline, s.analogy, s.analogy_emoji, s.trip,
       p.kind as post_kind, p.url, p.poster, p.score
     from snaps s left join posts p on p.snap_id = s.id
     where s.id = ${id} and s.user_id = ${userId}`
   if (!s) throw new HttpError(404, 'This snap has expired.')
   // Snaps from before impact was stored fall back to the action's standard card.
   const preset = actionById(s.action_id)
+  const impact: Impact | null = s.impact ? JSON.parse(s.impact) : (preset?.impact ?? null)
+  const fact = s.analogy ? { text: s.analogy, emoji: s.analogy_emoji } : impact && pickFact(impact)
   return {
     photo: s.photo,
-    impact: s.impact ? (JSON.parse(s.impact) as Impact) : (preset?.impact ?? null),
+    impact,
     headline: s.headline ?? preset?.headline ?? null,
-    analogy: s.analogy ?? preset?.analogy ?? null,
-    analogyEmoji: s.analogy_emoji ?? preset?.analogyEmoji ?? null,
+    analogy: fact?.text ?? null,
+    analogyEmoji: fact?.emoji ?? null,
+    trip: s.trip ? JSON.parse(s.trip) : null,
     post: s.url ? { kind: s.post_kind, url: s.url, poster: s.poster, score: s.score } : null,
   }
 }
@@ -380,8 +543,11 @@ const ROUTES: Record<string, (req: IncomingMessage) => Promise<unknown>> = {
   'POST /api/signup': signup,
   'POST /api/login': login,
   'POST /api/logout': logout,
+  'POST /api/forgot': forgotPassword,
+  'POST /api/reset': resetPassword,
   'GET /api/me': me,
   'PATCH /api/me': updateMe,
+  'POST /api/avatar': updateAvatar,
   'POST /api/snap': snap,
   'GET /api/snap': snapDetail,
   'GET /api/leaderboard/students': studentBoard,
@@ -420,6 +586,12 @@ export async function handle(req: IncomingMessage, res: ServerResponse) {
   }
 
   const path = new URL(req.url ?? '/', 'http://localhost').pathname.replace(/\/+$/, '')
+  if (req.method === 'GET' && path === '/api/avatar') {
+    return serveAvatar(req, res).catch((e) => {
+      console.error(e)
+      if (!res.headersSent) res.writeHead(500).end()
+    })
+  }
   const route = ROUTES[`${req.method} ${path}`]
   if (!route) return send(res, 404, { error: 'Not found' })
 

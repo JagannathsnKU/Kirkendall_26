@@ -1,5 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import '@fontsource-variable/bricolage-grotesque/opsz.css'
 import './styles.css'
 import './install'
 import App from './App'

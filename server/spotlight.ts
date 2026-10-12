@@ -1,13 +1,13 @@
 /*
  * Spotlight: snaps students choose to share with their school. Classmates vote,
- * and net upvotes pay the poster bonus points (SPOTLIGHT_BONUSES).
+ * and every UPVOTE_STEP net upvotes pays the poster bonus points.
  * Media goes straight from the phone to Vercel Blob; this server only signs
  * the upload and records the resulting URL.
  */
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import { handleUpload, type HandleUploadBody } from '@vercel/blob/client'
-import { REPORT_REASONS, spotlightBonus, type Post } from '../src/model.ts'
+import { REPORT_REASONS, avatarUrl, spotlightBonus, type Post } from '../src/model.ts'
 import { requireUser } from './auth.ts'
 import { db } from './db.ts'
 import { HttpError, readJson, str } from './http.ts'
@@ -80,7 +80,7 @@ export async function listPosts(req: IncomingMessage): Promise<Post[]> {
   const top = new URL(req.url ?? '/', 'http://localhost').searchParams.get('sort') !== 'new'
   const [me] = await sql<{ university_id: string }[]>`select university_id from users where id = ${userId}`
   const rows = await sql`
-    select p.id, p.user_id, p.kind, p.url, p.poster, p.label, p.emoji, p.score, p.bonus, p.ts, u.name,
+    select p.id, p.user_id, p.kind, p.url, p.poster, p.label, p.emoji, p.score, p.bonus, p.ts, u.name, u.avatar_at,
       coalesce(v.value, 0)::int as my_vote,
       exists (select 1 from reports r where r.post_id = p.id and r.user_id = ${userId}) as reported
     from posts p
@@ -93,6 +93,7 @@ export async function listPosts(req: IncomingMessage): Promise<Post[]> {
   return rows.map((r) => ({
     id: r.id,
     name: r.name,
+    avatar: avatarUrl(r.user_id, r.avatar_at),
     label: r.label,
     emoji: r.emoji,
     kind: r.kind,

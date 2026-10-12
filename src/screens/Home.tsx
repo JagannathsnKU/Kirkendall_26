@@ -1,16 +1,22 @@
-import { useEffect, useState } from 'react'
-import { Camera, ChevronRight, Download, Play, Sparkles, X } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Bus, Camera, ChevronRight, Download, Flame, Footprints, MapPin, Play, Snowflake, Sparkles, X } from 'lucide-react'
+import Aurora from '../Aurora'
 import { getSnapDetail, getStudentLeaderboard } from '../api'
-import { MILES_PER_KG_CO2, REWARDS, SNAP_TTL_DAYS, actionById, fmt, universityById } from '../data'
+import { REWARDS, SNAP_TTL_DAYS, actionById, fmt, universityById } from '../data'
 import { useInstall } from '../install'
 import type { Snap, SnapDetail } from '../model'
 import { go } from '../router'
 import { useStore } from '../store'
+import { Glyph } from '../glyph'
+import { milesText, summarize } from '../route'
 import { dayKey, nextMilestone, streakNow, type Streak } from '../streak'
+import { pendingTrip, useTrip } from '../tracker'
 import { Tree } from '../tree'
-import { Avatar, Bar, CountUp, ImpactStats, Logo, Sheet, amount, timeAgo } from '../ui'
+import { Avatar, Bar, CountUp, ImpactFact, ImpactStats, Logo, Sheet, hideBroken, timeAgo } from '../ui'
+import SpecularButton from '../SpecularButton'
 
 const DAY_MS = 24 * 60 * 60 * 1000
+const AURORA = ['#0c0d0c', '#022c22', '#0c0d0c']
 
 export default function Home() {
   const { session, openCamera } = useStore()
@@ -36,11 +42,11 @@ export default function Home() {
   }
 
   return (
-    <div className="page">
+    <div className="page home">
       <header className="top">
         <Logo />
         <button onClick={() => go('me')} aria-label="Profile">
-          <Avatar name={user.name} size={36} />
+          <Avatar name={user.name} src={user.avatar} size={36} />
         </button>
       </header>
 
@@ -49,9 +55,9 @@ export default function Home() {
           <Download size={18} />
           <span>{mode === 'ios' ? 'Tap Share → Add to Home Screen' : 'Get EcoU on your home screen'}</span>
           {mode === 'prompt' && (
-            <button className="btn btn-sm btn-primary" onClick={install}>
+            <SpecularButton size="sm" onClick={install}>
               Install
-            </button>
+            </SpecularButton>
           )}
           <button className="icon-btn sm" onClick={dismissInstall} aria-label="Dismiss">
             <X size={16} />
@@ -60,6 +66,7 @@ export default function Home() {
       )}
 
       <section className="hero">
+        <Aurora className="hero-aurora" colorStops={AURORA} amplitude={0.9} blend={0.6} height={0.5} speed={0.35} glow={0.7} opacity={0.55} mouseInteraction={false} />
         <div className="hero-head">
           <div>
             <p className="label">Points</p>
@@ -83,9 +90,7 @@ export default function Home() {
         )}
       </section>
 
-      <StreakCard streak={user.streak} onSnap={openCamera} />
-
-      <section className="card">
+      <section className="card impact-card">
         <p className="label">Your impact</p>
         <div className="impact-grid">
           <div>
@@ -101,8 +106,12 @@ export default function Home() {
             <span>L water</span>
           </div>
         </div>
-        {user.impact.co2 > 0 && <p className="analogy-line">🚗 Like not driving {amount(user.impact.co2 * MILES_PER_KG_CO2)} miles</p>}
+        <ImpactFact impact={user.impact} />
       </section>
+
+      <StreakCard streak={user.streak} onSnap={openCamera} />
+
+      <TripCard onSnap={openCamera} />
 
       <section>
         <p className="label pad">This week</p>
@@ -111,14 +120,16 @@ export default function Home() {
             {snaps.slice(0, 9).map((s) => (
               <button key={s.id} className="snap-open" onClick={() => setOpen(s)} aria-label={`Open ${s.label} snap`}>
                 <figure className="snap">
-                  <img src={s.thumb} alt="" />
+                  <img src={s.thumb} alt="" onError={hideBroken} />
                   {s.kind === 'video' && (
                     <span className="snap-play" aria-label="Video">
                       <Play size={12} fill="currentColor" />
                     </span>
                   )}
                   <figcaption>
-                    <span>{s.emoji ?? actionById(s.actionId)?.emoji}</span>
+                    <span className="thumb-icon">
+                      <Glyph emoji={s.emoji ?? actionById(s.actionId)?.emoji} size={14} strokeWidth={2} />
+                    </span>
                     <span>
                       +{s.points} · {timeAgo(s.ts)}
                     </span>
@@ -168,7 +179,9 @@ function SnapSheet({ snap, onClose }: { snap: Snap | null; onClose: () => void }
         </div>
 
         <div className="snap-detail-head">
-          <span className="snap-detail-emoji">{snap.emoji}</span>
+          <span className="snap-detail-icon">
+            <Glyph emoji={snap.emoji} size={22} />
+          </span>
           <div>
             <strong>{snap.label}</strong>
             <span>{when}</span>
@@ -186,12 +199,19 @@ function SnapSheet({ snap, onClose }: { snap: Snap | null; onClose: () => void }
           <>
             {detail.analogy && (
               <section className="analogy snap-analogy">
-                <span className="analogy-emoji">{detail.analogyEmoji}</span>
+                <span className="analogy-icon">
+                  <Glyph emoji={detail.analogyEmoji} size={22} />
+                </span>
                 <p className="analogy-text">{detail.analogy}</p>
                 {detail.headline && <p className="analogy-fact">{detail.headline}</p>}
               </section>
             )}
             {detail.impact && <ImpactStats impact={detail.impact} compact />}
+            {detail.trip && (
+              <p className="snap-detail-note">
+                <MapPin size={14} /> GPS trip · {milesText(detail.trip.miles)} in {Math.round(detail.trip.minutes)} min · {detail.trip.avgMph} mph avg
+              </p>
+            )}
             {post && (
               <p className="snap-detail-note">
                 <Sparkles size={14} /> Shared to Spotlight · {post.score} {Math.abs(post.score) === 1 ? 'vote' : 'votes'}
@@ -205,6 +225,40 @@ function SnapSheet({ snap, onClose }: { snap: Snap | null; onClose: () => void }
         </p>
       </div>
     </Sheet>
+  )
+}
+
+function TripCard({ onSnap }: { onSnap: () => void }) {
+  const { trip } = useTrip()
+  const done = pendingTrip(trip)
+  const live = trip && !trip.end ? trip : null
+  const miles = useMemo(() => (trip ? summarize(trip.points).miles : 0), [trip])
+
+  return (
+    <section className="card trip-card">
+      <span className="icon-tile" aria-hidden>
+        {trip?.mode === 'bus' ? <Bus size={20} /> : <Footprints size={20} />}
+      </span>
+      <div>
+        <strong>{done ? 'Trip finished' : live ? 'Trip in progress' : 'Going somewhere?'}</strong>
+        <span>
+          {done
+            ? `${milesText(miles)} tracked. Snap it to earn your points.`
+            : live
+              ? `${milesText(miles)} so far. Keep EcoU open.`
+              : 'Track a walk, bike or transit ride. Longer trips earn more.'}
+        </span>
+      </div>
+      {done ? (
+        <SpecularButton size="sm" onClick={onSnap}>
+          Snap
+        </SpecularButton>
+      ) : (
+        <button className="btn btn-soft btn-sm" onClick={() => go('trip')}>
+          {live ? 'Open' : 'Track'}
+        </button>
+      )}
+    </section>
   )
 }
 
@@ -230,15 +284,24 @@ function StreakCard({ streak, onSnap }: { streak: Streak; onSnap: () => void }) 
   return (
     <section className={`card streak is-${status}`}>
       <div className="streak-top">
-        <span className="streak-flame" aria-hidden>
-          🔥
+        <span className="icon-tile is-flame" aria-hidden>
+          <Flame size={18} />
         </span>
-        <strong className="num">{count}</strong>
-        <span className="streak-unit">day streak</span>
-        {streak.freezes > 0 && (
-          <span className="streak-freeze" aria-label={`${streak.freezes} streak freeze${streak.freezes > 1 ? 's' : ''}`}>
-            ❄️ {streak.freezes}
-          </span>
+        <div className="streak-text">
+          <p>
+            <strong className="num">{count}</strong> day streak
+            {streak.freezes > 0 && (
+              <span className="streak-freeze" aria-label={`${streak.freezes} streak freeze${streak.freezes > 1 ? 's' : ''}`}>
+                <Snowflake size={12} /> {streak.freezes}
+              </span>
+            )}
+          </p>
+          <span>{message}</span>
+        </div>
+        {status !== 'done' && (
+          <SpecularButton size="sm" onClick={onSnap}>
+            Snap
+          </SpecularButton>
         )}
       </div>
       <div className="streak-week">
@@ -256,14 +319,6 @@ function StreakCard({ streak, onSnap }: { streak: Streak; onSnap: () => void }) 
             </span>
           )
         })}
-      </div>
-      <div className="streak-foot">
-        <span>{message}</span>
-        {status !== 'done' && (
-          <button className="btn btn-primary btn-sm" onClick={onSnap}>
-            Snap
-          </button>
-        )}
       </div>
     </section>
   )

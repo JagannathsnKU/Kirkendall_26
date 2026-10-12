@@ -1,17 +1,22 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, RotateCcw, ShieldCheck, Sparkles, X } from 'lucide-react'
-import { atDailyLimit, sharePost, submitSnap } from '../api'
-import { ACTIONS, OTHER, universityById } from '../data'
-import { SPOTLIGHT_BONUSES } from '../model'
+import { AlertCircle, MapPin, RotateCcw, ShieldCheck, Sparkles, X } from 'lucide-react'
+import { atDailyLimit, cooldownLeft, sharePost, submitSnap } from '../api'
+import { ACTIONS, OTHER, pointsFor, universityById, waitText } from '../data'
+import { UPVOTE_BONUS, UPVOTE_STEP } from '../model'
 import type { Photo } from '../photo'
+import { milesText, summarize, tripImpact } from '../route'
 import { go } from '../router'
 import { useStore } from '../store'
+import { discardTrip, finishTrip, pendingTrip, useTrip } from '../tracker'
+import { Glyph } from '../glyph'
 import Camera from './Camera'
+import SpecularButton from '../SpecularButton'
 
 export default function Snap() {
   const { session, refresh, setResult } = useStore()
+  const { trip } = useTrip()
   const [photo, setPhoto] = useState<Photo | null>(null)
-  const [actionId, setActionId] = useState<string | null>(null)
+  const [actionId, setActionId] = useState<string | null>(() => pendingTrip(trip)?.mode ?? null)
   const [note, setNote] = useState('')
   const [share, setShare] = useState(false)
   const [checking, setChecking] = useState(false)
@@ -22,9 +27,31 @@ export default function Snap() {
   const clipUrl = useMemo(() => (photo?.video ? URL.createObjectURL(photo.video) : null), [photo])
   useEffect(() => () => void (clipUrl && URL.revokeObjectURL(clipUrl)), [clipUrl])
 
+  const [now, setNow] = useState(Date.now)
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const done = pendingTrip(trip, now)
+  const live = trip && !trip.end ? trip : null
+  const { miles: tripMiles, minutes } = useMemo(() => summarize(trip?.points ?? []), [trip])
+  const tripMinutes = Math.round(minutes)
+  const tripFor = done && actionId === done.mode ? done : null
+
+  useEffect(() => {
+    if (trip?.end && !done) discardTrip()
+  }, [trip, done])
+
+  /** Why an action can't be picked right now, or null if it can. */
+  const availability = (id: string) => {
+    if (atDailyLimit(session!.snaps, id)) return 'Done today'
+    const wait = cooldownLeft(session!.snaps, id, now)
+    return wait > 0 ? `In ${waitText(wait)}` : null
+  }
+
   const isOther = actionId === OTHER.id
-  const ready = !!actionId && (!isOther || note.trim().length >= 3)
-  const otherFull = atDailyLimit(session!.snaps, OTHER.id)
+  const ready = !!actionId && !availability(actionId) && (!isOther || note.trim().length >= 3)
   const busy = checking || sharing !== null
 
   const close = () => go('home')
@@ -37,12 +64,13 @@ export default function Snap() {
     if (!photo || !actionId || !ready || busy) return
     setChecking(true)
     setProblem(null)
-    const outcome = await submitSnap(actionId, photo, isOther ? note : undefined)
+    const outcome = await submitSnap(actionId, photo, isOther ? note : undefined, tripFor ? { mode: tripFor.mode, points: tripFor.points } : undefined)
     setChecking(false)
     if (!outcome.ok) {
       setProblem(outcome.message)
       return
     }
+    if (tripFor) discardTrip()
     let spotlight: 'shared' | 'failed' | undefined
     if (share) {
       setSharing(0)
@@ -97,41 +125,64 @@ export default function Snap() {
         <div className="problem">
           <AlertCircle size={22} />
           <p>{problem}</p>
-          <button className="btn btn-primary btn-sm" onClick={retake}>
+          <SpecularButton size="sm" onClick={retake}>
             Retake
-          </button>
+          </SpecularButton>
         </div>
       ) : (
         <>
+          {(done || live) && (
+            <div className="snap-trip">
+              <MapPin size={16} />
+              <span>
+                {live ? `Trip in progress · ${milesText(tripMiles)}` : `GPS trip · ${milesText(tripMiles)} in ${tripMinutes} min`}
+                {done && !tripFor && ` · pick ${ACTIONS.find((a) => a.id === done.mode)?.label} to use it`}
+              </span>
+              {live ? (
+                <SpecularButton size="sm"
+                  onClick={() => {
+                    finishTrip()
+                    setActionId(live.mode)
+                  }}
+                  disabled={busy}
+                >
+                  Finish
+                </SpecularButton>
+              ) : (
+                <button className="icon-btn sm" onClick={discardTrip} aria-label="Don’t use this trip" disabled={busy}>
+                  <X size={16} />
+                </button>
+              )}
+            </div>
+          )}
+
           <h1 className="title-sm">What did you do?</h1>
           <div className="actions">
-            {ACTIONS.map((a) => {
-              const full = atDailyLimit(session!.snaps, a.id)
+            {[...ACTIONS, OTHER].map((a) => {
+              const status = availability(a.id)
               return (
                 <button
                   key={a.id}
-                  className={`action ${actionId === a.id ? 'is-on' : ''}`}
+                  className={`action ${a.id === OTHER.id ? 'action-other' : ''} ${actionId === a.id ? 'is-on' : ''}`}
                   onClick={() => setActionId(a.id)}
                   aria-pressed={actionId === a.id}
-                  disabled={full || busy}
+                  disabled={!!status || busy}
                 >
-                  <span className="action-emoji">{a.emoji}</span>
+                  <span className="action-icon">
+                    <Glyph emoji={a.emoji} size={22} />
+                  </span>
                   <span className="action-label">{a.label}</span>
-                  <span className="action-pts">{full ? 'Done today' : `+${a.points}`}</span>
+                  <span className="action-pts">{status ?? `+${done && a.id === done.mode ? pointsFor(tripImpact(done.mode, tripMiles)) : a.points}`}</span>
                 </button>
               )
             })}
-            <button
-              className={`action action-other ${isOther ? 'is-on' : ''}`}
-              onClick={() => setActionId(OTHER.id)}
-              aria-pressed={isOther}
-              disabled={otherFull || busy}
-            >
-              <span className="action-emoji">{OTHER.emoji}</span>
-              <span className="action-label">{OTHER.label}</span>
-              <span className="action-pts">{otherFull ? 'Done today' : `+${OTHER.points}`}</span>
-            </button>
           </div>
+
+          {(actionId === 'walk' || actionId === 'bus') && !tripFor && !live && (
+            <p className="trip-note">
+              <MapPin size={16} /> Track your trip from Home next time to earn points for the full distance.
+            </p>
+          )}
 
           {isOther && (
             <input
@@ -158,15 +209,15 @@ export default function Snap() {
             </div>
             {share && (
               <span className="share-note">
-                Classmates can upvote it. {SPOTLIGHT_BONUSES[0].votes} upvotes = +{SPOTLIGHT_BONUSES[0].bonus} bonus points.
+                Classmates can upvote it. Every {UPVOTE_STEP} upvotes = +{UPVOTE_BONUS} bonus points.
               </span>
             )}
           </section>
 
           <div className="snap-foot">
-            <button className="btn btn-primary btn-block" disabled={!ready || busy} onClick={submit}>
+            <SpecularButton className="btn-block" disabled={!ready || busy} onClick={submit}>
               {busy ? <span className="spinner" /> : share ? 'Submit & share' : 'Submit'}
-            </button>
+            </SpecularButton>
           </div>
         </>
       )}

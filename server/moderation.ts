@@ -15,7 +15,7 @@ export const FLAG_AT = -3
 /** Reports from this many classmates hide a post until it's reviewed. */
 export const REPORT_HIDE_AT = 3
 /** This many cheating signals in a day puts the user in the review queue. */
-const AUTO_FLAG = { kinds: ['screen', 'duplicate', 'rate_limit'], count: 3, windowMs: 24 * 60 * 60 * 1000 }
+const AUTO_FLAG = { kinds: ['screen', 'duplicate', 'rate_limit', 'trip'], count: 3, windowMs: 24 * 60 * 60 * 1000 }
 
 export function logEvent(sql: Query, userId: string, kind: string, detail = '', actorId: string | null = null) {
   return sql`

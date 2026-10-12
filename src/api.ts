@@ -4,7 +4,7 @@
  * token and a copy of the last session so the app opens offline.
  */
 import { ANTI_CHEAT } from './config'
-import { OTHER, dailyLimit } from './data'
+import { OTHER, cooldownMinutes, dailyLimit } from './data'
 import {
   type AdminActivity,
   type AdminOverview,
@@ -23,6 +23,7 @@ import {
   type SubmitOutcome,
   type UniversityRow,
 } from './model'
+import type { TripMode, TripPoint } from './route'
 import type { Photo } from './photo'
 
 export type * from './model'
@@ -81,6 +82,13 @@ export const usedToday = (snaps: Snap[], actionId: string) =>
 
 export const atDailyLimit = (snaps: Snap[], actionId: string) => ANTI_CHEAT && usedToday(snaps, actionId) >= dailyLimit(actionId)
 
+/** Milliseconds until an action counts again, 0 if it's ready. */
+export function cooldownLeft(snaps: Snap[], actionId: string, now = Date.now()) {
+  if (!ANTI_CHEAT) return 0
+  const last = Math.max(0, ...snaps.filter((s) => s.actionId === actionId).map((s) => s.ts))
+  return Math.max(0, last + cooldownMinutes(actionId) * 60_000 - now)
+}
+
 /** Falls back to the last copy when offline or the server is down; null once logged out. */
 export async function getSession(): Promise<Session | null> {
   if (!token) return null
@@ -113,13 +121,28 @@ export async function updateProfile(name: string, universityId: string): Promise
   return session
 }
 
+/** `image` is a square JPEG data URL, or '' to remove the picture. */
+export async function updateAvatar(image: string): Promise<Session> {
+  const session = await call<Session>('avatar', 'POST', { image })
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session))
+  return session
+}
+
+export const requestPasswordReset = (email: string) => call('forgot', 'POST', { email })
+
+export async function resetPassword(resetToken: string, password: string): Promise<Session> {
+  const { token, session } = await call<{ token: string; session: Session }>('reset', 'POST', { token: resetToken, password })
+  remember(token, session)
+  return session
+}
+
 export async function signOut(): Promise<void> {
   await call('logout', 'POST').catch(() => {})
   remember(null, null)
 }
 
 /** `description` is only used for the Other category. */
-export async function submitSnap(actionId: string, photo: Photo, description?: string): Promise<SubmitOutcome> {
+export async function submitSnap(actionId: string, photo: Photo, description?: string, trip?: { mode: TripMode; points: TripPoint[] }): Promise<SubmitOutcome> {
   const isOther = actionId === OTHER.id
   if (isOther && (description ?? '').trim().length < 3) return { ok: false, kind: 'error', message: 'Tell us what you did.' }
   try {
@@ -132,6 +155,7 @@ export async function submitSnap(actionId: string, photo: Photo, description?: s
       hash: photo.hash,
       source: photo.source,
       description: isOther ? description!.trim() : undefined,
+      trip,
     })
   } catch (e) {
     return { ok: false, kind: 'error', message: (e as Error).message }

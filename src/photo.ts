@@ -27,19 +27,27 @@ type Source = HTMLVideoElement | HTMLImageElement
 const dims = (s: Source) =>
   s instanceof HTMLVideoElement ? { w: s.videoWidth, h: s.videoHeight } : { w: s.naturalWidth, h: s.naturalHeight }
 
-function render(src: Source, maxSide: number, quality: number, square = false) {
-  const { w, h } = dims(src)
+/** The centre of the frame that's visible at a digital `zoom`. */
+function crop(src: Source, zoom: number) {
+  const { w: fw, h: fh } = dims(src)
+  const w = fw / zoom
+  const h = fh / zoom
+  return { x: (fw - w) / 2, y: (fh - h) / 2, w, h }
+}
+
+function render(src: Source, maxSide: number, quality: number, square = false, zoom = 1) {
+  const { x, y, w, h } = crop(src, zoom)
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')!
   if (square) {
     const s = Math.min(w, h)
     canvas.width = canvas.height = maxSide
-    ctx.drawImage(src, (w - s) / 2, (h - s) / 2, s, s, 0, 0, maxSide, maxSide)
+    ctx.drawImage(src, x + (w - s) / 2, y + (h - s) / 2, s, s, 0, 0, maxSide, maxSide)
   } else {
     const k = Math.min(1, maxSide / Math.max(w, h))
     canvas.width = Math.round(w * k)
     canvas.height = Math.round(h * k)
-    ctx.drawImage(src, 0, 0, canvas.width, canvas.height)
+    ctx.drawImage(src, x, y, w, h, 0, 0, canvas.width, canvas.height)
   }
   return canvas.toDataURL('image/jpeg', quality)
 }
@@ -51,13 +59,13 @@ const base64 = (dataUrl: string) => dataUrl.split(',')[1]
  * Returns '' for flat, low-detail images (a dark room, a blank wall) whose hashes
  * would collide with each other; the server-side AI check covers those.
  */
-function dhash(src: Source) {
-  const { w, h } = dims(src)
+function dhash(src: Source, zoom = 1) {
+  const { x, y, w, h } = crop(src, zoom)
   const canvas = document.createElement('canvas')
   canvas.width = 9
   canvas.height = 8
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!
-  ctx.drawImage(src, 0, 0, w, h, 0, 0, 9, 8)
+  ctx.drawImage(src, x, y, w, h, 0, 0, 9, 8)
   const px = ctx.getImageData(0, 0, 9, 8).data
   const gray = (i: number) => px[i * 4] * 0.299 + px[i * 4 + 1] * 0.587 + px[i * 4 + 2] * 0.114
   const values = Array.from({ length: 72 }, (_, i) => gray(i))
@@ -73,14 +81,15 @@ function dhash(src: Source) {
   return hex
 }
 
-export function capture(src: Source, source: Photo['source'] = 'camera'): Photo {
+/** `zoom` is a digital zoom to crop to, for cameras that can't zoom themselves. */
+export function capture(src: Source, source: Photo['source'] = 'camera', zoom = 1): Photo {
   return {
     kind: 'photo',
-    preview: render(src, 1080, 0.82),
-    frames: [base64(render(src, 768, 0.8))],
-    thumb: render(src, 240, 0.7, true),
-    image: render(src, IMAGE_SIDE, 0.72),
-    hash: dhash(src),
+    preview: render(src, 1080, 0.82, false, zoom),
+    frames: [base64(render(src, 768, 0.8, false, zoom))],
+    thumb: render(src, 240, 0.7, true, zoom),
+    image: render(src, IMAGE_SIDE, 0.72, false, zoom),
+    hash: dhash(src, zoom),
     source,
   }
 }
@@ -101,8 +110,20 @@ export function fromFile(file: File): Promise<Photo> {
   })
 }
 
+/** A small square JPEG data URL for a profile picture. */
+export async function avatarFromFile(file: File) {
+  const url = URL.createObjectURL(file)
+  try {
+    return render(await loadImage(url), 256, 0.85, true)
+  } catch {
+    throw new Error('We couldn’t open that picture. Try a JPEG or PNG.')
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
 /** A still from a playing or paused video, sized for the AI check. */
-export const still = (video: HTMLVideoElement) => render(video, 768, 0.78)
+export const still = (video: HTMLVideoElement, zoom = 1) => render(video, 768, 0.78, false, zoom)
 
 function loadImage(url: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {

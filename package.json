@@ -7,13 +7,15 @@
     "node": ">=22.18"
   },
   "scripts": {
-    "dev": "vite --host",
+    "dev": "node scripts/dev.ts",
+    "web": "vite --host",
     "api": "node --env-file-if-exists=.env --watch server/index.ts",
     "build": "tsc --noEmit && tsc -p tsconfig.server.json && vite build && node scripts/vercel-output.ts",
     "preview": "vite preview --host",
     "start": "node --env-file-if-exists=.env server/index.ts"
   },
   "dependencies": {
+    "@fontsource-variable/bricolage-grotesque": "^5.3.0",
     "@vercel/blob": "^2.8.1",
     "lucide-react": "^1.51.0",
     "postgres": "^3.4.9",

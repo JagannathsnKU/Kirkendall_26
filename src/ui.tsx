@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Camera, Gift, House, Sparkles, Trophy } from 'lucide-react'
 import { fmt, type Impact } from './data'
+import { pickFact } from './facts'
+import { Glyph } from './glyph'
 import { go } from './router'
 import { useStore } from './store'
 
@@ -31,19 +33,41 @@ export function CountUp({ value, from = 0, duration = 900, delay = 0 }: { value:
   return <span className="num">{fmt(Math.round(n))}</span>
 }
 
+/** Keep in sync with public/icons/icon.svg. */
+export function LogoMark({ size = 28 }: { size?: number }) {
+  const id = `leaf${useId().replace(/[^\w-]/g, '')}`
+  return (
+    <svg className="logo-mark" width={size} height={size} viewBox="0 0 64 64" aria-hidden>
+      <defs>
+        <linearGradient id={id} x1="0" y1="1" x2="1" y2="0">
+          <stop offset="0" stopColor="#059669" />
+          <stop offset="1" stopColor="#6ee7b7" />
+        </linearGradient>
+      </defs>
+      <rect width="64" height="64" rx="18" fill="#0d0f0e" />
+      <g transform="translate(2 -2)">
+        <path d="M15 49l5-5" stroke="#10b981" strokeWidth="3.2" strokeLinecap="round" />
+        <path d="M19 45A26 26 0 0 1 45 19A26 26 0 0 1 19 45z" fill={`url(#${id})`} />
+        <path d="M23 41l11-11" stroke="#0d0f0e" strokeWidth="1.8" strokeLinecap="round" />
+      </g>
+    </svg>
+  )
+}
+
 export function Logo({ size = 28 }: { size?: number }) {
   return (
     <span className="logo">
-      <img src="/icons/icon.svg" width={size} height={size} alt="" />
+      <LogoMark size={size} />
       <span>EcoU</span>
     </span>
   )
 }
 
-export function Avatar({ name, size = 40 }: { name: string; size?: number }) {
+export function Avatar({ name, src, size = 40 }: { name: string; src?: string | null; size?: number }) {
+  const [failed, setFailed] = useState<string | null>(null)
   return (
     <span className="avatar" style={{ width: size, height: size, fontSize: size * 0.42 }}>
-      {name.trim().charAt(0).toUpperCase() || '?'}
+      {src && failed !== src ? <img src={src} alt="" onError={() => setFailed(src)} /> : name.trim().charAt(0).toUpperCase() || '?'}
     </span>
   )
 }
@@ -121,21 +145,29 @@ const TABS = [
 export function TabBar({ active }: { active: string }) {
   const { openCamera } = useStore()
   return (
-    <nav className="tabbar">
-      {TABS.map((t) =>
-        t.path === 'snap' ? (
-          <button key={t.path} className="tab-snap" onClick={openCamera} aria-label="Snap a green action">
-            <Camera size={26} strokeWidth={2.2} />
-          </button>
-        ) : (
-          <button key={t.path} className={`tab ${active === t.path ? 'is-on' : ''}`} onClick={() => go(t.path)} aria-current={active === t.path ? 'page' : undefined}>
-            <t.icon size={22} strokeWidth={active === t.path ? 2.4 : 1.8} />
-            <span>{t.label}</span>
-          </button>
-        ),
-      )}
-    </nav>
+    <>
+      <div className="tabbar-shade" aria-hidden />
+      <nav className="tabbar">
+        {TABS.map((t) =>
+          t.path === 'snap' ? (
+            <button key={t.path} className="tab-snap" onClick={openCamera} aria-label="Snap a green action">
+              <Camera size={26} strokeWidth={2.2} />
+            </button>
+          ) : (
+            <button key={t.path} className={`tab ${active === t.path ? 'is-on' : ''}`} onClick={() => go(t.path)} aria-current={active === t.path ? 'page' : undefined}>
+              <t.icon size={22} strokeWidth={active === t.path ? 2.4 : 1.8} />
+              <span>{t.label}</span>
+            </button>
+          ),
+        )}
+      </nav>
+    </>
   )
+}
+
+/** Hides an image that fails to load so its tile's background shows instead of a broken-image icon. */
+export const hideBroken = (e: { currentTarget: HTMLImageElement }) => {
+  e.currentTarget.style.visibility = 'hidden'
 }
 
 /** Small amounts keep their decimals so a single snap doesn't read as "0". */
@@ -161,6 +193,19 @@ export function ImpactStats({ impact, compact = false }: { impact: Impact; compa
         <span>plastic</span>
       </div>
     </div>
+  )
+}
+
+/** A random everyday comparison for a running total, picked again when the total changes. */
+export function ImpactFact({ impact }: { impact: Impact }) {
+  const { co2, kwh, water, plastic } = impact
+  const fact = useMemo(() => pickFact({ co2, kwh, water, plastic }), [co2, kwh, water, plastic])
+  if (co2 + kwh + water + plastic <= 0) return null
+  return (
+    <p className="analogy-line">
+      <Glyph emoji={fact.emoji} size={16} strokeWidth={2} />
+      {fact.text}
+    </p>
   )
 }
 

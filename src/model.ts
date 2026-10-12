@@ -1,5 +1,6 @@
 /* Shapes shared by the app and the server. Keep it free of browser code: the server imports it. */
 import type { Action, Impact } from './data.ts'
+import type { Fact } from './facts.ts'
 import type { Streak, StreakUpdate } from './streak.ts'
 
 export interface User {
@@ -10,9 +11,14 @@ export interface User {
   points: number
   impact: Impact
   streak: Streak
+  /** Profile picture URL, or null to show their initial. */
+  avatar: string | null
   /** Listed in ADMIN_EMAILS on the server. */
   admin?: boolean
 }
+
+/** Versioned so phones can cache a profile picture until it changes. */
+export const avatarUrl = (userId: string, at: string | number) => (Number(at) ? `/api/avatar?u=${userId}&v=${at}` : null)
 
 export type MediaKind = 'photo' | 'video'
 
@@ -35,6 +41,8 @@ export interface SnapDetail {
   headline: string | null
   analogy: string | null
   analogyEmoji: string | null
+  /** The GPS trip the snap was logged with, if any. */
+  trip: { miles: number; minutes: number; avgMph: number } | null
   /** The clip or photo, if it was shared to Spotlight. */
   post: { kind: MediaKind; url: string; poster: string | null; score: number } | null
 }
@@ -43,6 +51,7 @@ export interface SnapDetail {
 export interface Post {
   id: string
   name: string
+  avatar: string | null
   label: string
   emoji: string
   kind: MediaKind
@@ -70,6 +79,7 @@ export const EVENT_LABELS: Record<string, string> = {
   screen: 'AI saw a screen or stock photo',
   duplicate: 'Reused an old photo',
   rate_limit: 'Sent too many snaps at once',
+  trip: 'GPS trip didn’t match the action',
   downvoted: 'Post voted down',
   reported: 'Post reported',
   ai_hidden: 'AI hid a post',
@@ -84,7 +94,7 @@ export const EVENT_LABELS: Record<string, string> = {
   unbanned: 'Unsuspended',
 }
 
-export const SUSPICIOUS_EVENTS = ['screen', 'duplicate', 'rate_limit', 'downvoted', 'reported', 'ai_hidden']
+export const SUSPICIOUS_EVENTS = ['screen', 'duplicate', 'rate_limit', 'trip', 'downvoted', 'reported', 'ai_hidden']
 
 export interface AdminSummary {
   open: number
@@ -175,15 +185,14 @@ export interface FlagItem {
   } | null
 }
 
-/** Net upvotes a post needs for each bonus. Bonuses add up and are never taken back. */
-export const SPOTLIGHT_BONUSES = [
-  { votes: 3, bonus: 10 },
-  { votes: 10, bonus: 25 },
-  { votes: 25, bonus: 50 },
-]
+/** Every UPVOTE_STEP net upvotes on a Spotlight post earns UPVOTE_BONUS points. Bonuses are never taken back. */
+export const UPVOTE_STEP = 10
+export const UPVOTE_BONUS = 10
 
-export const spotlightBonus = (score: number) =>
-  SPOTLIGHT_BONUSES.filter((b) => score >= b.votes).reduce((sum, b) => sum + b.bonus, 0)
+export const spotlightBonus = (score: number) => Math.floor(Math.max(0, score) / UPVOTE_STEP) * UPVOTE_BONUS
+
+/** Net upvotes where the next bonus lands. */
+export const nextUpvoteBonus = (score: number) => (Math.floor(Math.max(0, score) / UPVOTE_STEP) + 1) * UPVOTE_STEP
 
 export interface Redemption {
   rewardId: string
@@ -215,6 +224,7 @@ export interface UniversityRow {
 export interface SnapResult {
   snapId: string
   action: Action
+  fact: Fact
   thumb: string
   points: number
   total: number

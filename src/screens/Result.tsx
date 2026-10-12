@@ -1,9 +1,11 @@
 import { useEffect } from 'react'
-import { ArrowUp, Check, Trophy } from 'lucide-react'
+import { ArrowUp, Check, Flame, Snowflake, Sparkles, Trophy } from 'lucide-react'
+import { Glyph } from '../glyph'
 import { universityById } from '../data'
 import { go } from '../router'
 import { useStore } from '../store'
 import { CountUp } from '../ui'
+import SpecularButton from '../SpecularButton'
 
 export default function Result() {
   const { result, setResult, session } = useStore()
@@ -40,22 +42,39 @@ export default function Result() {
 
       {result.streak.extended && (
         <p className="result-streak r2">
-          🔥 {result.streak.count}-day streak
+          <Flame size={16} strokeWidth={2.2} />
+          {result.streak.count}-day streak
           {result.streak.bonus > 0 && <strong>+{result.streak.bonus} bonus</strong>}
-          {result.streak.freezeEarned && <span>❄️ Freeze earned</span>}
-          {result.streak.freezesUsed > 0 && <span>❄️ Freeze saved it</span>}
+          {result.streak.freezeEarned && (
+            <span>
+              <Snowflake size={14} /> Freeze earned
+            </span>
+          )}
+          {result.streak.freezesUsed > 0 && (
+            <span>
+              <Snowflake size={14} /> Freeze saved it
+            </span>
+          )}
         </p>
       )}
 
       {result.spotlight && (
         <p className={`result-spotlight r2 ${result.spotlight === 'failed' ? 'is-failed' : ''}`}>
-          {result.spotlight === 'shared' ? `✨ Shared to ${uni.short}’s Spotlight` : 'Couldn’t share to Spotlight, but your points count.'}
+          {result.spotlight === 'shared' ? (
+            <>
+              <Sparkles size={15} /> Shared to {uni.short}’s Spotlight
+            </>
+          ) : (
+            'Couldn’t share to Spotlight, but your points count.'
+          )}
         </p>
       )}
 
       <section className="analogy r3">
-        <span className="analogy-emoji">{action.analogyEmoji}</span>
-        <p className="analogy-text">{action.analogy}</p>
+        <span className="analogy-icon">
+          <Glyph emoji={result.fact.emoji} size={24} />
+        </span>
+        <p className="analogy-text">{result.fact.text}</p>
         <p className="analogy-fact">{action.headline}</p>
       </section>
 
@@ -78,9 +97,9 @@ export default function Result() {
       </section>
 
       <div className="result-foot r5">
-        <button className="btn btn-primary btn-block" onClick={done}>
+        <SpecularButton className="btn-block" autoAnimate onClick={done}>
           Done
-        </button>
+        </SpecularButton>
       </div>
     </div>
   )

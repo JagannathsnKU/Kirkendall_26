@@ -20,10 +20,10 @@ export interface Action {
   points: number
   /** Most times it counts per day. */
   limit: number
+  /** Minutes before the same action counts again. */
+  cooldown: number
   impact: Impact
   headline: string
-  analogy: string
-  analogyEmoji: string
 }
 
 /**
@@ -47,140 +47,109 @@ export const ACTIONS: Action[] = [
     label: 'Bought secondhand',
     emoji: '🏷️',
     limit: 2,
+    cooldown: 60,
     impact: { ...none, co2: 2.5, water: 700 },
     headline: 'Skipping a new item saved ~2.5 kg of CO₂ and ~700 L of water',
-    analogy: 'That’s a year of drinking water',
-    analogyEmoji: '💧',
   }),
   action({
     id: 'donate',
     label: 'Donated clothes',
     emoji: '👚',
     limit: 1,
+    cooldown: 60,
     impact: { ...none, co2: 2 },
     headline: 'Giving clothes a second life saves ~2 kg of CO₂',
-    analogy: 'That’s like charging your phone 250 times',
-    analogyEmoji: '📱',
-  }),
-  action({
-    id: 'bus',
-    label: 'Took transit',
-    emoji: '🚌',
-    limit: 4,
-    impact: { ...none, co2: 1.6 },
-    headline: 'You saved ~1.6 kg of CO₂ vs. driving 6 miles alone',
-    analogy: 'That’s what a tree absorbs in about a month',
-    analogyEmoji: '🌳',
   }),
   action({
     id: 'volunteer',
     label: 'Volunteered',
     emoji: '🤝',
     limit: 1,
+    cooldown: 60,
     impact: { ...none, co2: 1, plastic: 5 },
     headline: 'Your help saved ~1 kg of CO₂ and ~5 pieces of litter',
-    analogy: 'That’s like not driving 2.5 miles',
-    analogyEmoji: '🚗',
-  }),
-  action({
-    id: 'walk',
-    label: 'Walked or biked',
-    emoji: '🚲',
-    limit: 4,
-    impact: { ...none, co2: 1.2 },
-    headline: 'You skipped ~1.2 kg of CO₂ by not driving 3 miles',
-    analogy: 'That’s like charging your phone 150 times',
-    analogyEmoji: '📱',
   }),
   action({
     id: 'plant',
     label: 'Plant-based meal',
     emoji: '🥗',
     limit: 3,
+    cooldown: 120,
     impact: { ...none, co2: 1 },
     headline: 'You saved ~1 kg of CO₂ vs. a meat-based meal',
-    analogy: 'That’s like not driving 2.5 miles',
-    analogyEmoji: '🚗',
   }),
   action({
     id: 'dry',
     label: 'Air-dried clothes',
     emoji: '🧺',
     limit: 1,
+    cooldown: 60,
     impact: { ...none, kwh: 2.5, co2: 1 },
     headline: 'You saved ~2.5 kWh by skipping the dryer',
-    analogy: 'That’s like powering a fridge for 2 days',
-    analogyEmoji: '🧊',
+  }),
+  /* Untracked trips earn a short trip's worth. A GPS-tracked trip earns by distance (see route.ts). */
+  action({
+    id: 'bus',
+    label: 'Took transit',
+    emoji: '🚌',
+    limit: 4,
+    cooldown: 30,
+    impact: { ...none, co2: 0.6 },
+    headline: 'Riding ~3 miles by transit instead of driving saves ~0.6 kg of CO₂',
   }),
   action({
     id: 'coldwash',
     label: 'Cold-water wash',
     emoji: '🫧',
     limit: 1,
+    cooldown: 60,
     impact: { ...none, kwh: 1.2, co2: 0.5 },
     headline: 'You saved ~1.2 kWh by not heating the wash water',
-    analogy: 'That’s like an hour of microwave time',
-    analogyEmoji: '🍿',
   }),
   action({
-    id: 'shower',
-    label: 'Shorter shower',
-    emoji: '🚿',
-    limit: 1,
-    impact: { ...none, water: 38, kwh: 1, co2: 0.4 },
-    headline: 'You saved ~38 L of water by cutting 5 minutes',
-    analogy: 'That’s 2 weeks of drinking water',
-    analogyEmoji: '💧',
+    id: 'walk',
+    label: 'Walked or biked',
+    emoji: '🚲',
+    limit: 4,
+    cooldown: 30,
+    impact: { ...none, co2: 0.4 },
+    headline: 'Walking or biking ~1 mile instead of driving saves ~0.4 kg of CO₂',
   }),
   action({
     id: 'container',
     label: 'Own container',
     emoji: '🥡',
     limit: 3,
+    cooldown: 120,
     impact: { ...none, plastic: 1, co2: 0.1 },
     headline: 'You skipped a single-use takeout box',
-    analogy: 'Foam boxes last 500+ years in a landfill',
-    analogyEmoji: '⏳',
   }),
   action({
     id: 'bag',
     label: 'Reusable bag',
     emoji: '🛍️',
     limit: 2,
+    cooldown: 60,
     impact: { ...none, plastic: 2, co2: 0.03 },
     headline: 'You kept ~2 plastic bags out of the trash',
-    analogy: 'A plastic bag is used for minutes but lasts centuries',
-    analogyEmoji: '⏳',
   }),
   action({
     id: 'bottle',
     label: 'Reusable bottle',
     emoji: '🥤',
     limit: 3,
+    cooldown: 60,
     impact: { ...none, plastic: 1, co2: 0.08 },
     headline: 'You kept 1 plastic bottle out of the trash',
-    analogy: 'It would’ve taken ~450 years to break down',
-    analogyEmoji: '⏳',
   }),
   action({
     id: 'recycle',
     label: 'Recycled',
     emoji: '♻️',
     limit: 3,
+    cooldown: 30,
     impact: { ...none, kwh: 0.2, co2: 0.1 },
     headline: 'You saved ~0.2 kWh by recycling instead of trashing',
-    analogy: 'That’s enough to run a TV for 3 hours',
-    analogyEmoji: '📺',
-  }),
-  action({
-    id: 'lights',
-    label: 'Lights off',
-    emoji: '💡',
-    limit: 3,
-    impact: { ...none, kwh: 0.1, co2: 0.04 },
-    headline: 'You saved ~0.1 kWh of electricity',
-    analogy: 'That’s like 6 minutes of microwave time',
-    analogyEmoji: '🍿',
   }),
 ]
 
@@ -190,12 +159,19 @@ export const actionById = (id: string) => ACTIONS.find((a) => a.id === id)
 export const OTHER_CAP: Impact = { co2: 1.5, kwh: 3, water: 100, plastic: 3 }
 
 /** Free-text actions. The server's AI check estimates their impact; points follow from it. */
-export const OTHER = { id: 'other', label: 'Other', emoji: '✨', points: `5–${pointsFor(OTHER_CAP)}`, limit: 2 }
+export const OTHER = { id: 'other', label: 'Other', emoji: '✨', points: `5–${pointsFor(OTHER_CAP)}`, limit: 2, cooldown: 30 }
 
 /** How many times an action counts per day. */
 export const dailyLimit = (actionId: string) => actionById(actionId)?.limit ?? OTHER.limit
 
-export const MILES_PER_KG_CO2 = 2.5
+/** Minutes before an action counts again. */
+export const cooldownMinutes = (actionId: string) => actionById(actionId)?.cooldown ?? OTHER.cooldown
+
+/** "23 min" or "1 h 5 min". */
+export function waitText(ms: number) {
+  const m = Math.max(1, Math.ceil(ms / 60_000))
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`
+}
 
 /** Snaps (and their Spotlight posts) are deleted after this long. Points and impact totals stay. */
 export const SNAP_TTL_DAYS = 7
@@ -262,12 +238,12 @@ export interface Reward {
 }
 
 export const REWARDS: Reward[] = [
-  { id: 'grind', shop: 'Daily Grind Coffee', offer: '10% off any drink', points: 100, color: '#8a5a3b' },
-  { id: 'leaf', shop: 'Green Leaf Café', offer: 'Free pastry with a coffee', points: 250, color: '#4f8a3c' },
-  { id: 'cycles', shop: 'Campus Cycles', offer: '15% off a bike tune-up', points: 500, color: '#2f5d73' },
-  { id: 'thrift', shop: 'Second Spin Thrift', offer: '20% off one item', points: 750, color: '#b5654a' },
-  { id: 'market', shop: 'Fresh Fields Market', offer: '$5 off a $25 order', points: 1000, color: '#c28a1e' },
-  { id: 'juice', shop: 'Juice Theory', offer: 'Buy one, get one smoothie', points: 1500, color: '#a0457a' },
+  { id: 'grind', shop: 'Daily Grind Coffee', offer: '10% off any drink', points: 100, color: '#111312' },
+  { id: 'leaf', shop: 'Green Leaf Café', offer: 'Free pastry with a coffee', points: 250, color: '#047857' },
+  { id: 'cycles', shop: 'Campus Cycles', offer: '15% off a bike tune-up', points: 500, color: '#1f2421' },
+  { id: 'thrift', shop: 'Second Spin Thrift', offer: '20% off one item', points: 750, color: '#065f46' },
+  { id: 'market', shop: 'Fresh Fields Market', offer: '$5 off a $25 order', points: 1000, color: '#2b312e' },
+  { id: 'juice', shop: 'Juice Theory', offer: 'Buy one, get one smoothie', points: 1500, color: '#059669' },
 ]
 
 export const fmt = (n: number, d = 0) =>

@@ -11,6 +11,8 @@ export interface Verdict {
   reason: string
   /** The AI thought it was a photo of a screen or a stock image. */
   suspicious?: boolean
+  /** The AI thought it was the same scene as one of the student's earlier photos. */
+  duplicate?: boolean
   custom?: CustomAction
 }
 
@@ -27,7 +29,9 @@ const BASE_PROPS = {
   reason: { type: 'string', description: 'One short, friendly sentence to the student, max 12 words.' },
 }
 
-const SCHEMA = { type: 'object', properties: BASE_PROPS, required: Object.keys(BASE_PROPS) }
+const DUPLICATE_PROPS = {
+  duplicate: { type: 'boolean', description: 'The new photo shows the same scene as one of the earlier photos.' },
+}
 
 const OTHER_PROPS = {
   ...BASE_PROPS,
@@ -39,11 +43,9 @@ const OTHER_PROPS = {
   water: { type: 'number', description: 'Liters of water saved.' },
   plastic: { type: 'integer', description: 'Single-use plastic items avoided.' },
   headline: { type: 'string', description: 'The impact as one fact with a rough number, max 12 words, e.g. "You saved ~20 L of water".' },
-  analogy: { type: 'string', description: 'An everyday comparison starting "That’s like", max 10 words.' },
-  analogyEmoji: { type: 'string', description: 'One emoji for the analogy.' },
 }
 
-const OTHER_SCHEMA = { type: 'object', properties: OTHER_PROPS, required: Object.keys(OTHER_PROPS) }
+const schemaFor = (props: object) => ({ type: 'object', properties: props, required: Object.keys(props) })
 
 const RULES = [
   'Mark it suspicious if it is a photo of a screen, monitor, printout, or another photo, or looks like a stock or downloaded image.',
@@ -74,7 +76,6 @@ function otherPrompt(description: string) {
     'driving 0.4 kg CO₂/mile, one phone charge 0.008 kg CO₂, microwave 1.1 kW, fridge 1.2 kWh/day, one drink bottle 0.5 L.',
     'For scale: a reusable bottle saves 1 plastic item and 0.08 kg CO₂; a plant-based meal saves 1 kg CO₂; skipping a 3-mile drive saves 1.2 kg CO₂.',
     'Use 0 for fields that do not apply. Use miles, never kilometers.',
-    'Make the analogy something a student instantly pictures, like phone charges, minutes of microwave, miles not driven, or days of drinking water.',
   ].join('\n')
 }
 
@@ -91,27 +92,40 @@ function mockVerdict(actionId: string, description?: string): Verdict {
       emoji: '🌱',
       points: pointsFor({ co2: 0.1, kwh: 0, water: 0, plastic: 0 }),
       limit: OTHER.limit,
+      cooldown: OTHER.cooldown,
       impact: { co2: 0.1, kwh: 0, water: 0, plastic: 0 },
       headline: 'You saved ~0.1 kg of CO₂',
-      analogy: 'That’s like charging your phone 12 times',
-      analogyEmoji: '📱',
     },
   }
 }
 
-const VIDEO_NOTE = 'The images are frames from one short video, in order. Judge the video as a whole, as if it were one photo.'
+const VIDEO_NOTE = 'The new images are frames from one short video, in order. Judge the video as a whole, as if it were one photo.'
 
-/** One Gemini call that answers in JSON matching `schema`. `images` are base64 JPEGs. */
-export async function askGemini(images: string[], instructions: string, schema: object, timeoutMs = 20_000) {
+const EARLIER_LABEL = 'EARLIER PHOTOS (already counted for this student; use them only to spot repeats):'
+
+function duplicateRules() {
+  return [
+    'Images before the EARLIER PHOTOS label are the new submission. Judge match, confidence, and suspicious from the new submission only.',
+    'duplicate: true if the new submission shows the same scene as any earlier photo: the same place with the same objects in the same arrangement,',
+    'even from a different angle, distance, crop, or lighting, and even if the student claims a different action.',
+    'Doing the action again on a new occasion is not a duplicate, e.g. a different meal, or the same bottle somewhere else.',
+  ]
+}
+
+const jpeg = (data: string) => ({ inline_data: { mime_type: 'image/jpeg', data } })
+
+/** One Gemini call that answers in JSON matching `schema`. `images` and `earlier` are base64 JPEGs. */
+export async function askGemini(images: string[], instructions: string, schema: object, timeoutMs = 20_000, earlier: string[] = []) {
   const key = process.env.GEMINI_API_KEY
   if (!key) throw new HttpError(503, 'Photo verification isn’t set up yet.')
 
+  const parts = [...images.map(jpeg), ...(earlier.length ? [{ text: EARLIER_LABEL }, ...earlier.map(jpeg)] : []), { text: instructions }]
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
     signal: AbortSignal.timeout(timeoutMs),
     body: JSON.stringify({
-      contents: [{ parts: [...images.map((data) => ({ inline_data: { mime_type: 'image/jpeg', data } })), { text: instructions }] }],
+      contents: [{ parts }],
       generationConfig: {
         temperature: 0,
         responseMimeType: 'application/json',
@@ -135,25 +149,32 @@ export async function askGemini(images: string[], instructions: string, schema: 
   }
 }
 
-/** `images` holds one photo, or a few frames from a short video. */
-export async function verifyPhoto(actionId: string, images: string[], description?: string): Promise<Verdict> {
+/**
+ * `images` holds one photo, or a few frames from a short video.
+ * `earlier` holds the student's recent photos, so re-shoots of the same scene don't count twice.
+ */
+export async function verifyPhoto(actionId: string, images: string[], description?: string, earlier: string[] = []): Promise<Verdict> {
   const isOther = actionId === OTHER_ID
   if (!CHECKS[actionId] && !isOther) throw new HttpError(400, 'Unknown action')
   if (isOther && (!description || description.length < 3)) throw new HttpError(400, 'Tell us what you did.')
-  const instructions = isOther ? otherPrompt(description!) : prompt(actionId)
 
   if (process.env.VERIFY_MOCK === '1') return mockVerdict(actionId, description)
 
-  const out = await askGemini(
-    images,
-    images.length > 1 ? `${VIDEO_NOTE}\n${instructions}` : instructions,
-    isOther ? OTHER_SCHEMA : SCHEMA,
-  )
+  const compare = earlier.length > 0
+  const instructions = [
+    ...(images.length > 1 ? [VIDEO_NOTE] : []),
+    isOther ? otherPrompt(description!) : prompt(actionId),
+    ...(compare ? duplicateRules() : []),
+  ].join('\n')
+  const props = { ...(isOther ? OTHER_PROPS : BASE_PROPS), ...(compare ? DUPLICATE_PROPS : {}) }
+  const out = await askGemini(images, instructions, schemaFor(props), undefined, earlier)
 
   const confidence = num(out.confidence, 1)
   const suspicious = ANTI_CHEAT && out.suspicious === true
-  const verified = out.match === true && !suspicious && confidence >= MIN_CONFIDENCE && (!isOther || out.sustainable === true)
-  const verdict: Verdict = { verified, confidence, reason: text(out.reason, 140, ''), suspicious }
+  const duplicate = compare && out.duplicate === true
+  const verified =
+    out.match === true && !suspicious && !duplicate && confidence >= MIN_CONFIDENCE && (!isOther || out.sustainable === true)
+  const verdict: Verdict = { verified, confidence, reason: text(out.reason, 140, ''), suspicious, duplicate }
   if (!isOther || !verified) return verdict
 
   const impact: Impact = {
@@ -169,10 +190,9 @@ export async function verifyPhoto(actionId: string, images: string[], descriptio
       emoji: text(out.emoji, 8, '🌱'),
       points: pointsFor(impact),
       limit: OTHER.limit,
+      cooldown: OTHER.cooldown,
       impact,
       headline: text(out.headline, 90, 'Every small action adds up'),
-      analogy: text(out.analogy, 80, 'That’s a real step for the planet'),
-      analogyEmoji: text(out.analogyEmoji, 8, '🌍'),
     },
   }
 }

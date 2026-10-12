@@ -122,6 +122,9 @@ const SCHEMA = [
   `alter table snaps add column if not exists headline text`,
   `alter table snaps add column if not exists analogy text`,
   `alter table snaps add column if not exists analogy_emoji text`,
+  `alter table snaps add column if not exists trip_start bigint`,
+  `alter table snaps add column if not exists trip_end bigint`,
+  `alter table snaps add column if not exists trip text`,
   `create index if not exists snaps_ts on snaps (ts)`,
   // Snaps are deleted after a week; their fingerprints stay so old photos can't be reused.
   `create table if not exists photo_hashes (
@@ -134,6 +137,16 @@ const SCHEMA = [
   `create unique index if not exists flags_open_post on flags (post_id) where status = 'open'`,
   `create unique index if not exists flags_open_user on flags (user_id) where status = 'open' and kind = 'user'`,
   `create index if not exists flags_status_ts on flags (status, ts desc)`,
+  `alter table users add column if not exists avatar text not null default ''`,
+  `alter table users add column if not exists avatar_at bigint not null default 0`,
+  // Only a hash of each reset link's token is stored, like sessions.
+  `create table if not exists password_resets (
+    token text primary key,
+    user_id text not null references users (id) on delete cascade,
+    expires bigint not null,
+    ts bigint not null
+  )`,
+  `create index if not exists password_resets_user on password_resets (user_id, ts)`,
 ]
 
 let ready: Promise<Sql> | null = null

@@ -4,6 +4,7 @@ import { logIn, signUp, updateProfile } from '../api'
 import { UNIVERSITIES } from '../data'
 import { go } from '../router'
 import { useStore } from '../store'
+import SpecularButton from '../SpecularButton'
 
 type Mode = 'join' | 'login' | 'edit'
 
@@ -82,6 +83,11 @@ export default function Setup({ login = false }: { login?: boolean }) {
               autoComplete={mode === 'join' ? 'new-password' : 'current-password'}
             />
           </label>
+          {mode === 'login' && (
+            <button type="button" className="forgot-link" onClick={() => go('forgot')}>
+              Forgot password?
+            </button>
+          )}
         </>
       )}
 
@@ -112,9 +118,9 @@ export default function Setup({ login = false }: { login?: boolean }) {
             {error}
           </p>
         )}
-        <button type="submit" className="btn btn-primary btn-block" disabled={!ready || busy}>
+        <SpecularButton type="submit" className="btn-block" disabled={!ready || busy}>
           {busy ? <span className="spinner" /> : mode === 'edit' ? 'Save' : mode === 'login' ? 'Log in' : 'Join'}
-        </button>
+        </SpecularButton>
         {mode !== 'edit' && (
           <button type="button" className="setup-switch" onClick={() => go(mode === 'login' ? 'setup' : 'login', { replace: true })}>
             {mode === 'login' ? 'New here? Create an account' : 'Already have an account? Log in'}

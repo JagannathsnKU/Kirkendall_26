@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import { ArrowBigDown, ArrowBigUp, Flag, Sparkles, Trash2 } from 'lucide-react'
 import { deletePost, getPosts, reportPost, votePost } from '../api'
 import { universityById } from '../data'
-import { REPORT_REASONS, SPOTLIGHT_BONUSES, type Post, type ReportReason } from '../model'
+import { REPORT_REASONS, UPVOTE_BONUS, nextUpvoteBonus, type Post, type ReportReason } from '../model'
 import { useStore } from '../store'
+import { Glyph } from '../glyph'
 import { Avatar, Sheet, timeAgo } from '../ui'
 
 export default function Spotlight() {
@@ -124,15 +125,14 @@ interface CardProps {
 }
 
 function SpotCard({ post: p, onVote, onRemove, onReport }: CardProps) {
-  const next = SPOTLIGHT_BONUSES.find((b) => p.score < b.votes)
   return (
     <li className="spot">
       <header className="spot-head">
-        <Avatar name={p.name} size={34} />
+        <Avatar name={p.name} src={p.avatar} size={34} />
         <div>
           <strong>{p.name}</strong>
           <span>
-            {p.emoji} {p.label} · {timeAgo(p.ts)}
+            <Glyph emoji={p.emoji} size={13} strokeWidth={2} /> {p.label} · {timeAgo(p.ts)}
           </span>
         </div>
         {p.mine ? (
@@ -165,9 +165,9 @@ function SpotCard({ post: p, onVote, onRemove, onReport }: CardProps) {
           </button>
         </div>
         {p.bonus > 0 && <span className="spot-bonus">+{p.bonus} bonus earned</span>}
-        {p.mine && next && (
+        {p.mine && (
           <span className="spot-next">
-            +{next.bonus} at {next.votes} upvotes
+            +{UPVOTE_BONUS} at {nextUpvoteBonus(p.score)} upvotes
           </span>
         )}
       </footer>

@@ -18,7 +18,7 @@ import {
   takeDownPost,
   takePoints,
 } from '../api'
-import { MILES_PER_KG_CO2, fmt } from '../data'
+import { fmt } from '../data'
 import {
   EVENT_LABELS,
   REPORT_REASONS,
@@ -33,7 +33,9 @@ import {
 } from '../model'
 import { go } from '../router'
 import { useStore } from '../store'
-import { Avatar, ImpactStats, Logo, Sheet, amount, timeAgo } from '../ui'
+import { Glyph } from '../glyph'
+import { Avatar, ImpactFact, ImpactStats, Logo, Sheet, amount, hideBroken, timeAgo } from '../ui'
+import SpecularButton from '../SpecularButton'
 
 type Tab = 'queue' | 'posts' | 'activity' | 'users'
 
@@ -80,9 +82,9 @@ export default function Admin() {
         <div className="install">
           <Bell size={18} />
           <span>Get an alert when something needs review</span>
-          <button className="btn btn-sm btn-primary" onClick={async () => setNotify(await enableAlerts())}>
+          <SpecularButton size="sm" onClick={async () => setNotify(await enableAlerts())}>
             Turn on
-          </button>
+          </SpecularButton>
         </div>
       )}
 
@@ -127,7 +129,7 @@ function Overview() {
         {fmt(data.students)} students · {fmt(data.snapsThisWeek)} snaps this week
       </p>
       <ImpactStats impact={data.impact} />
-      {data.impact.co2 > 0 && <p className="analogy-line">🚗 Like not driving {amount(data.impact.co2 * MILES_PER_KG_CO2)} miles</p>}
+      <ImpactFact impact={data.impact} />
     </section>
   )
 }
@@ -173,7 +175,7 @@ function Posts({ onUser }: { onUser: (id: string) => void }) {
             <div>
               <strong>{p.user.name}</strong>
               <span>
-                {p.emoji} {p.label} · {p.user.school} · score {p.score}
+                <Glyph emoji={p.emoji} size={13} strokeWidth={2} /> {p.label} · {p.user.school} · score {p.score}
               </span>
             </div>
             <ChevronRight size={18} className="chev" />
@@ -291,7 +293,7 @@ function FlagCard({ flag: f, onUser, act }: { flag: FlagItem; onUser: (id: strin
             )}
           </div>
           <p className="mod-line">
-            {f.post.emoji} {f.post.label} · score {f.post.score}
+            <Glyph emoji={f.post.emoji} size={13} strokeWidth={2} /> {f.post.label} · score {f.post.score}
           </p>
         </>
       )}
@@ -536,9 +538,7 @@ function UserSheet({ userId, onClose, onChange }: { userId: string | null; onClo
             <p className="label">Impact</p>
             <div className="card">
               <ImpactStats impact={user.impact} compact />
-              {user.impact.co2 > 0 && (
-                <p className="analogy-line">🚗 Like not driving {amount(user.impact.co2 * MILES_PER_KG_CO2)} miles</p>
-              )}
+              <ImpactFact impact={user.impact} />
             </div>
           </section>
 
@@ -547,9 +547,9 @@ function UserSheet({ userId, onClose, onChange }: { userId: string | null; onClo
             <div className="mod-form">
               <input type="number" inputMode="numeric" min={1} placeholder="Points" value={takeBack} onChange={(e) => setTakeBack(e.target.value)} />
               <input placeholder="Reason (optional)" value={reason} maxLength={120} onChange={(e) => setReason(e.target.value)} />
-              <button className="btn btn-primary btn-sm" disabled={!(Number(takeBack) >= 1)} onClick={take}>
+              <SpecularButton size="sm" disabled={!(Number(takeBack) >= 1)} onClick={take}>
                 Take
-              </button>
+              </SpecularButton>
             </div>
           </section>
 
@@ -581,7 +581,7 @@ function UserSheet({ userId, onClose, onChange }: { userId: string | null; onClo
               <div className="snaps">
                 {user.snaps.map((s) => (
                   <figure key={s.id} className="snap">
-                    <img src={s.thumb} alt="" />
+                    <img src={s.thumb} alt="" onError={hideBroken} />
                     <button
                       className="mod-revoke"
                       onClick={() => act(() => revokeSnap(s.id), `Remove “${s.label}” and take back its ${s.points} pts${s.posted ? ' plus any Spotlight bonus' : ''}?`)}
@@ -589,7 +589,9 @@ function UserSheet({ userId, onClose, onChange }: { userId: string | null; onClo
                       Revoke
                     </button>
                     <figcaption>
-                      <span>{s.emoji}</span>
+                      <span className="thumb-icon">
+                        <Glyph emoji={s.emoji} size={14} strokeWidth={2} />
+                      </span>
                       <span>
                         +{s.points} · {timeAgo(s.ts)}
                       </span>

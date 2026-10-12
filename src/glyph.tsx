@@ -1,0 +1,86 @@
+import {
+  Bath,
+  Bike,
+  Bus,
+  Car,
+  Coffee,
+  Droplet,
+  Earth,
+  Flame,
+  Footprints,
+  GlassWater,
+  HandHeart,
+  Hourglass,
+  Laptop,
+  Leaf,
+  Lightbulb,
+  Microwave,
+  PartyPopper,
+  Recycle,
+  Refrigerator,
+  Salad,
+  ShoppingBag,
+  ShowerHead,
+  Shirt,
+  Smartphone,
+  Snowflake,
+  Soup,
+  Sparkles,
+  Sprout,
+  Tag,
+  Toilet,
+  TreeDeciduous,
+  Tv,
+  WashingMachine,
+  Waves,
+  Wind,
+  type LucideIcon,
+} from 'lucide-react'
+
+/*
+ * Actions, facts and snaps store an emoji as a short, stable key (old rows in the database
+ * have them too). The app draws a line icon for it instead of the emoji itself.
+ */
+const ICONS: Record<string, LucideIcon> = {
+  '🏷': Tag,
+  '👚': Shirt,
+  '🤝': HandHeart,
+  '🥗': Salad,
+  '🧺': Wind,
+  '🚌': Bus,
+  '🫧': WashingMachine,
+  '🚲': Bike,
+  '🚶': Footprints,
+  '🥡': Soup,
+  '🛍': ShoppingBag,
+  '🥤': GlassWater,
+  '♻': Recycle,
+  '✨': Sparkles,
+  '📱': Smartphone,
+  '💡': Lightbulb,
+  '🎈': PartyPopper,
+  '🌳': TreeDeciduous,
+  '📺': Tv,
+  '🚗': Car,
+  '☕': Coffee,
+  '🍿': Microwave,
+  '🧊': Refrigerator,
+  '💻': Laptop,
+  '💧': Droplet,
+  '🚿': ShowerHead,
+  '🚽': Toilet,
+  '🛁': Bath,
+  '⏳': Hourglass,
+  '🌊': Waves,
+  '🌍': Earth,
+  '🌱': Sprout,
+  '🔥': Flame,
+  '❄': Snowflake,
+}
+
+export const iconFor = (emoji: string | null | undefined): LucideIcon => ICONS[(emoji ?? '').replace(/\uFE0F/g, '')] ?? Leaf
+
+export function Glyph({ emoji, size = 20, strokeWidth = 1.8 }: { emoji: string | null | undefined; size?: number; strokeWidth?: number }) {
+  const Icon = iconFor(emoji)
+  return <Icon size={size} strokeWidth={strokeWidth} className="glyph" aria-hidden />
+}

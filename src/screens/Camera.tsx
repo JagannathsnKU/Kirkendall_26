@@ -1,15 +1,32 @@
-import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, CameraOff, Image as ImageIcon, X } from 'lucide-react'
+import { useEffect, useRef, useState, type PointerEvent } from 'react'
+import { AlertCircle, CameraOff, Image as ImageIcon, SwitchCamera, X } from 'lucide-react'
 import { ANTI_CHEAT } from '../config'
 import { checkUpload, checkVideo } from '../exif'
 import { MAX_RECORD_SECONDS, capture, fromFile, fromStills, fromVideoFile, still, type Photo } from '../photo'
 
 type CamState = 'starting' | 'live' | 'denied' | 'unavailable'
+type Facing = 'environment' | 'user'
+/** `hardware` zoom is done by the camera; otherwise the preview is scaled and photos are cropped. */
+interface ZoomRange {
+  min: number
+  max: number
+  hardware: boolean
+}
 
 const HOLD_MS = 280
 const RECORD_TYPES = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm']
+const MAX_ZOOM = 5
+const DIGITAL: ZoomRange = { min: 1, max: MAX_ZOOM, hardware: false }
 const canRecord = typeof MediaRecorder !== 'undefined'
 const isVideo = (file: File) => file.type.startsWith('video/') || /\.(mov|mp4|m4v|webm)$/i.test(file.name)
+
+function zoomRangeOf(track: MediaStreamTrack | undefined): { range: ZoomRange; zoom: number } {
+  const caps = track?.getCapabilities?.() as { zoom?: { min: number; max: number } } | undefined
+  const hw = caps?.zoom
+  if (!hw || !(hw.max > hw.min)) return { range: DIGITAL, zoom: 1 }
+  const settings = track!.getSettings() as { zoom?: number }
+  return { range: { min: hw.min, max: Math.min(hw.max, MAX_ZOOM), hardware: true }, zoom: settings.zoom ?? hw.min }
+}
 
 export default function Camera({ onCapture, onClose }: { onCapture: (p: Photo) => void; onClose: () => void }) {
   const video = useRef<HTMLVideoElement>(null)
@@ -18,11 +35,21 @@ export default function Camera({ onCapture, onClose }: { onCapture: (p: Photo) =
   const stills = useRef<string[]>([])
   const holdTimer = useRef(0)
   const tick = useRef(0)
+  const pointers = useRef(new Map<number, { x: number; y: number }>())
+  const pinch = useRef<{ dist: number; zoom: number } | null>(null)
   const [state, setState] = useState<CamState>('starting')
+  const [facing, setFacing] = useState<Facing>('environment')
+  const [canFlip, setCanFlip] = useState(false)
+  const [range, setRange] = useState<ZoomRange>(DIGITAL)
+  const [zoom, setZoom] = useState(1)
   const [flash, setFlash] = useState(false)
   const [reading, setReading] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [seconds, setSeconds] = useState<number | null>(null)
+
+  const digitalZoom = range.hardware ? 1 : zoom
+  const digitalRef = useRef(1)
+  digitalRef.current = digitalZoom
 
   useEffect(() => {
     let cancelled = false
@@ -30,34 +57,87 @@ export default function Camera({ onCapture, onClose }: { onCapture: (p: Photo) =
       setState('unavailable')
       return
     }
+    setState('starting')
     navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } }, audio: false })
+      .getUserMedia({ video: { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1440 } }, audio: false })
       .then((s) => {
         if (cancelled) return s.getTracks().forEach((t) => t.stop())
         stream.current = s
         if (video.current) video.current.srcObject = s
+        const z = zoomRangeOf(s.getVideoTracks()[0])
+        setRange(z.range)
+        setZoom(z.zoom)
         setState('live')
+        navigator.mediaDevices
+          .enumerateDevices()
+          .then((devices) => setCanFlip(devices.filter((d) => d.kind === 'videoinput').length > 1))
+          .catch(() => {})
       })
       .catch((e: DOMException) => setState(e.name === 'NotAllowedError' ? 'denied' : 'unavailable'))
     return () => {
       cancelled = true
+      stream.current?.getTracks().forEach((t) => t.stop())
+      stream.current = null
+    }
+  }, [facing])
+
+  useEffect(
+    () => () => {
       clearTimeout(holdTimer.current)
       clearInterval(tick.current)
       if (recorder.current) {
         recorder.current.onstop = null
         recorder.current.stop()
       }
-      stream.current?.getTracks().forEach((t) => t.stop())
-    }
-  }, [])
+    },
+    [],
+  )
 
   const stop = () => stream.current?.getTracks().forEach((t) => t.stop())
+
+  const applyZoom = (z: number) => {
+    const next = Math.min(range.max, Math.max(range.min, z))
+    setZoom(next)
+    if (range.hardware) {
+      stream.current
+        ?.getVideoTracks()[0]
+        ?.applyConstraints({ advanced: [{ zoom: next } as MediaTrackConstraintSet] })
+        .catch(() => {})
+    }
+  }
+
+  const distance = () => {
+    const [a, b] = [...pointers.current.values()]
+    return Math.hypot(a.x - b.x, a.y - b.y)
+  }
+
+  const touchDown = (e: PointerEvent) => {
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    if (pointers.current.size === 2) pinch.current = { dist: distance(), zoom }
+  }
+
+  const touchMove = (e: PointerEvent) => {
+    if (!pointers.current.has(e.pointerId)) return
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    if (pinch.current && pointers.current.size === 2) applyZoom((pinch.current.zoom * distance()) / pinch.current.dist)
+  }
+
+  const touchUp = (e: PointerEvent) => {
+    pointers.current.delete(e.pointerId)
+    if (pointers.current.size < 2) pinch.current = null
+  }
+
+  const flip = () => {
+    setZoom(1)
+    setRange(DIGITAL)
+    setFacing((f) => (f === 'environment' ? 'user' : 'environment'))
+  }
 
   const shoot = () => {
     const v = video.current
     if (!v || !v.videoWidth) return
     setFlash(true)
-    const photo = capture(v)
+    const photo = capture(v, 'camera', digitalZoom)
     stop()
     setTimeout(() => onCapture(photo), 120)
   }
@@ -67,7 +147,7 @@ export default function Camera({ onCapture, onClose }: { onCapture: (p: Photo) =
     recorder.current = null
     clearInterval(tick.current)
     if (rec && rec.state !== 'inactive') {
-      if (video.current) stills.current.push(still(video.current))
+      if (video.current) stills.current.push(still(video.current, digitalRef.current))
       rec.stop()
     }
   }
@@ -83,7 +163,7 @@ export default function Camera({ onCapture, onClose }: { onCapture: (p: Photo) =
       return false
     }
     const chunks: Blob[] = []
-    stills.current = [still(v)]
+    stills.current = [still(v, digitalRef.current)]
     rec.ondataavailable = (e) => e.data.size && chunks.push(e.data)
     rec.onstop = async () => {
       const clip = new Blob(chunks, { type: rec.mimeType || mimeType || 'video/mp4' })
@@ -97,7 +177,7 @@ export default function Camera({ onCapture, onClose }: { onCapture: (p: Photo) =
     tick.current = window.setInterval(() => {
       const t = (Date.now() - startedAt) / 1000
       setSeconds(t)
-      stills.current.push(still(v))
+      stills.current.push(still(v, digitalRef.current))
       if (t >= MAX_RECORD_SECONDS) finishRecording()
     }, 500)
     return true
@@ -149,10 +229,23 @@ export default function Camera({ onCapture, onClose }: { onCapture: (p: Photo) =
   )
 
   const recording = seconds !== null
+  const mirror = facing === 'user' ? -1 : 1
+  const zoomLabel = `${+zoom.toFixed(1)}×`
 
   return (
     <div className="camera">
-      <video ref={video} className="camera-video" autoPlay playsInline muted />
+      <video
+        ref={video}
+        className="camera-video"
+        style={{ transform: `scale(${mirror * digitalZoom}, ${digitalZoom})` }}
+        autoPlay
+        playsInline
+        muted
+        onPointerDown={touchDown}
+        onPointerMove={touchMove}
+        onPointerUp={touchUp}
+        onPointerCancel={touchUp}
+      />
       {flash && <div className="camera-flash" />}
 
       {!recording && (
@@ -177,6 +270,13 @@ export default function Camera({ onCapture, onClose }: { onCapture: (p: Photo) =
       {state === 'live' && (
         <>
           <button
+            className="camera-zoom"
+            onClick={() => applyZoom(zoom < 1.95 ? 2 : Math.max(1, range.min))}
+            aria-label={`Zoom ${zoomLabel}. Tap to change, or pinch the preview.`}
+          >
+            {zoomLabel}
+          </button>
+          <button
             className={`shutter ${recording ? 'is-recording' : ''}`}
             style={recording ? { ['--progress' as string]: `${(seconds / MAX_RECORD_SECONDS) * 360}deg` } : undefined}
             onPointerDown={press}
@@ -186,12 +286,17 @@ export default function Camera({ onCapture, onClose }: { onCapture: (p: Photo) =
             onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && shoot()}
             aria-label={canRecord ? 'Tap for a photo, hold for a video' : 'Take photo'}
           />
-          {!recording && canRecord && <p className="camera-hint">Tap for photo · hold for video</p>}
+          {!recording && canRecord && <p className="camera-hint">Tap for photo · hold for video · pinch to zoom</p>}
           {!recording && (
             <label className="camera-gallery" aria-label="Upload a photo or video">
               {reading ? <span className="spinner" /> : <ImageIcon size={22} />}
               {picker}
             </label>
+          )}
+          {!recording && canFlip && (
+            <button className="camera-flip" onClick={flip} aria-label="Switch camera">
+              <SwitchCamera size={22} />
+            </button>
           )}
         </>
       )}
