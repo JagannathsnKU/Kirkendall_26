@@ -1,9 +1,16 @@
-import { useRef, useState, type ChangeEvent } from 'react'
-import { Camera, ChevronRight, Download, ImageMinus, LogOut, Pencil } from 'lucide-react'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
+import { Bell, BellOff, Camera, ChevronRight, Download, ImageMinus, LogOut, Pencil } from 'lucide-react'
 import { signOut, updateAvatar } from '../api'
 import { fmt, universityById } from '../data'
 import { useInstall } from '../install'
 import { avatarFromFile } from '../photo'
+import {
+  checkRemindersNow,
+  disableReminders,
+  enableReminders,
+  remindersOn,
+  remindersSupported,
+} from '../reminders'
 import { go } from '../router'
 import { useStore } from '../store'
 import { Avatar, Sheet } from '../ui'
@@ -13,8 +20,27 @@ export default function Me() {
   const { mode, install } = useInstall()
   const [iosHelp, setIosHelp] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [nudge, setNudge] = useState(remindersOn)
   const picker = useRef<HTMLInputElement>(null)
   const { user } = session!
+
+  useEffect(() => {
+    setNudge(remindersOn())
+    const sync = () => setNudge(remindersOn())
+    document.addEventListener('visibilitychange', sync)
+    return () => document.removeEventListener('visibilitychange', sync)
+  }, [])
+
+  const toggleNudge = async () => {
+    if (nudge) {
+      disableReminders()
+      setNudge(false)
+      return
+    }
+    const ok = await enableReminders()
+    setNudge(ok)
+    if (ok) checkRemindersNow()
+  }
 
   const leave = async () => {
     if (!confirm('Sign out? You can log back in with your email.')) return
@@ -87,6 +113,15 @@ export default function Me() {
           <li>
             <button onClick={() => confirm('Remove your profile photo?') && saveAvatar('')} disabled={busy}>
               <ImageMinus size={18} /> Remove photo
+            </button>
+          </li>
+        )}
+        {remindersSupported && (
+          <li>
+            <button onClick={toggleNudge}>
+              {nudge ? <Bell size={18} /> : <BellOff size={18} />}
+              {nudge ? 'Daily snap reminders on' : 'Daily snap reminders off'}
+              <ChevronRight size={18} className="chev" />
             </button>
           </li>
         )}

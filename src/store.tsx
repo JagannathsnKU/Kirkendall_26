@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { notifyAdmin } from './alerts'
 import * as api from './api'
+import { ensureReminders, startReminders, stopReminders } from './reminders'
 import { go } from './router'
 
 const ALERT_POLL_MS = 30_000
@@ -57,6 +58,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       document.removeEventListener('visibilitychange', checkAlerts)
     }
   }, [isAdmin, checkAlerts])
+
+  // Keep a live streak pointer so nudges stop the moment today’s snap lands.
+  const streakRef = useRef(session?.user.streak ?? null)
+  streakRef.current = session?.user.streak ?? null
+
+  useEffect(() => {
+    if (!session || session.user.admin) {
+      stopReminders()
+      return
+    }
+    // Reminders are on by default — ask the browser once, then schedule nudges.
+    let alive = true
+    void ensureReminders().then(() => {
+      if (alive) startReminders(() => streakRef.current)
+    })
+    return () => {
+      alive = false
+      stopReminders()
+    }
+  }, [session?.user.id, session?.user.admin])
 
   return (
     <Ctx.Provider value={{ ready, session, refresh, openCamera: () => go('snap'), result, setResult, alerts, checkAlerts }}>
