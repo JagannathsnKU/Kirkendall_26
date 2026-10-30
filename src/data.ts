@@ -204,30 +204,13 @@ export const UNIVERSITIES: University[] = [
 export const universityById = (id: string) => UNIVERSITIES.find((u) => u.id === id) ?? UNIVERSITIES[0]
 
 /* Fake leaderboard entries so early boards aren't empty. Shown at every school. */
-export const SEED_STUDENTS = [1240, 1105, 980, 870, 760, 640, 525, 410, 320, 240, 180, 120, 75, 35, 5].map((points, i) => ({
-  id: `demo-${i + 1}`,
-  name: `Demo ${i + 1}`,
-  points,
-}))
+/** Fake leaderboard filler — left empty so ranks show only real students. */
+export const SEED_STUDENTS: { id: string; name: string; points: number }[] = []
 
-export const SEED_UNIVERSITY_POINTS: Record<string, number> = {
-  asu: 151200,
-  berkeley: 198400,
-  gt: 142900,
-  isu: 96300,
-  ksu: 88700,
-  mizzou: 101500,
-  nyu: 133800,
-  osu: 176100,
-  psu: 164300,
-  purdue: 128600,
-  ucla: 187900,
-  ku: 117400,
-  umich: 181200,
-  ut: 169500,
-  uw: 192700,
-  wisc: 158800,
-}
+/** Extra school-total filler — zeroed so “All schools” reflects real points only. */
+export const SEED_UNIVERSITY_POINTS: Record<string, number> = Object.fromEntries(
+  ['asu', 'berkeley', 'gt', 'isu', 'ksu', 'mizzou', 'nyu', 'osu', 'psu', 'purdue', 'ucla', 'ku', 'umich', 'ut', 'uw', 'wisc'].map((id) => [id, 0]),
+)
 
 export interface Reward {
   id: string

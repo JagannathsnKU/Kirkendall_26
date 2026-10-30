@@ -523,7 +523,7 @@ async function studentBoard(req: IncomingMessage): Promise<StudentRow[]> {
   const real = await sql<{ id: string; name: string; points: number }[]>`
     select id, name, points from users
     where university_id = ${me.university_id} and not banned and ${notAdmin(sql)} order by points desc, created_at limit 100`
-  const rows = [...real.map((r) => ({ ...r, me: r.id === userId })), ...SEED_STUDENTS.map((s) => ({ ...s, me: false }))]
+  const rows = real.map((r) => ({ ...r, me: r.id === userId }))
   if (!rows.some((r) => r.me)) rows.push({ id: me.id, name: me.name, points: me.points, me: true })
   return rows.sort((a, b) => b.points - a.points || Number(b.me) - Number(a.me))
 }
